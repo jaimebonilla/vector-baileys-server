@@ -1,0 +1,19 @@
+# Variables de entorno (nunca subir)
+.env
+
+# Sesiones de WhatsApp (credenciales locales)
+sessions_data/
+
+# Dependencias
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code (configuración local del IDE)
+.claude/

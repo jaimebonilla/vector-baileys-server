@@ -1,0 +1,24 @@
+{
+  "name": "vector-baileys-server",
+  "version": "1.0.0",
+  "description": "Servidor WhatsApp para Vector - sistema de supervisión de vendedores",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "@whiskeysockets/baileys": "^6.7.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "node-cron": "^3.0.3",
+    "pino": "^8.17.0",
+    "pino-pretty": "^10.3.1",
+    "qrcode": "^1.5.3"
+  }
+}
