@@ -68,6 +68,15 @@ async function iniciarBaileys() {
     logger.error({ err }, '❌ Error al iniciar Bot Central - el servidor sigue activo');
   }
 
+  // Sesiones de supervisores predeterminadas
+  for (const vendedorId of ['vendedor1', 'vendedor2']) {
+    try {
+      await iniciarSesionSupervisor(vendedorId);
+    } catch (err) {
+      logger.error({ err }, `❌ Error al iniciar sesión de ${vendedorId} - el servidor sigue activo`);
+    }
+  }
+
   // Cron de alertas
   try {
     iniciarCronAlertas();
@@ -76,7 +85,7 @@ async function iniciarBaileys() {
     logger.error({ err }, '❌ Error al iniciar cron de alertas');
   }
 
-  logger.info('💡 Para añadir sesiones de supervisor, usa POST /api/sesion/:vendedorId');
+  logger.info('💡 Sesiones Bot Central, vendedor1 y vendedor2 iniciadas automáticamente');
 }
 
 module.exports = app;
