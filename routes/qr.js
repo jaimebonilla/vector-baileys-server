@@ -36,10 +36,10 @@ router.get('/qr/:sessionId', async (req, res) => {
     }
 
     // Si ya está conectado
-    if (estado === 'conectado') {
+    if (estado === 'connected') {
       return res.json({
         sessionId,
-        status: 'conectado',
+        status: 'connected',
         qr: null
       });
     }
@@ -50,14 +50,14 @@ router.get('/qr/:sessionId', async (req, res) => {
         const qrBase64 = await QRCode.toDataURL(qrString);
         return res.json({
           sessionId,
-          status: 'esperando_qr',
+          status: 'waiting_qr',
           qr: qrBase64
         });
       } catch (qrErr) {
         logger.error({ qrErr }, 'Error al generar imagen QR');
         return res.json({
           sessionId,
-          status: 'esperando_qr',
+          status: 'waiting_qr',
           qr: null,
           qrRaw: qrString
         });

@@ -45,7 +45,7 @@ async function iniciarSesionSupervisor(vendedorId) {
 
   // Si ya existe y está conectada, no hacer nada
   const existente = sesiones.get(vendedorId);
-  if (existente && existente.estado === 'conectado') {
+  if (existente && existente.estado === 'connected') {
     appLogger.info(`Sesión supervisor ${vendedorId} ya está conectada`);
     return;
   }
@@ -75,7 +75,7 @@ async function conectarSupervisor(vendedorId, sessionPath) {
 
   if (sesion.reintentos >= MAX_REINTENTOS) {
     appLogger.warn(`⛔ Sesión supervisor ${vendedorId}: máximo de reintentos alcanzado (${MAX_REINTENTOS}). Deteniendo.`);
-    sesion.estado = 'detenido';
+    sesion.estado = 'stopped';
     return;
   }
 
@@ -105,12 +105,12 @@ async function conectarSupervisor(vendedorId, sessionPath) {
 
       if (qr) {
         sesion.qr = qr;
-        sesion.estado = 'esperando_qr';
+        sesion.estado = 'waiting_qr';
         appLogger.info(`📱 QR listo para supervisor ${vendedorId} - consulta /api/qr/${vendedorId}`);
       }
 
       if (connection === 'open') {
-        sesion.estado = 'conectado';
+        sesion.estado = 'connected';
         sesion.qr = null;
         sesion.reintentos = 0;
         sesion.conectadoEn = new Date().toISOString();
@@ -139,7 +139,7 @@ async function conectarSupervisor(vendedorId, sessionPath) {
           setTimeout(() => conectarSupervisor(vendedorId, sessionPath), delay);
         } else {
           appLogger.error(`⛔ Supervisor ${vendedorId}: máximo reintentos. Detenido.`);
-          sesion.estado = 'detenido';
+          sesion.estado = 'stopped';
         }
       }
     });

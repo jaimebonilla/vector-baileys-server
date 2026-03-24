@@ -46,7 +46,7 @@ async function conectarBotCentral() {
 
   if (reintentos >= MAX_REINTENTOS) {
     appLogger.error(`⛔ Bot Central: máximo de reintentos (${MAX_REINTENTOS}) alcanzado. Detenido.`);
-    botEstado = 'detenido';
+    botEstado = 'stopped';
     return;
   }
 
@@ -74,12 +74,12 @@ async function conectarBotCentral() {
 
       if (qr) {
         botQR = qr;
-        botEstado = 'esperando_qr';
+        botEstado = 'waiting_qr';
         appLogger.info('📱 QR del Bot Central listo - consulta /api/qr/bot-central');
       }
 
       if (connection === 'open') {
-        botEstado = 'conectado';
+        botEstado = 'connected';
         botQR = null;
         reintentos = 0;
         appLogger.info('✅ Bot Central conectado y listo');
@@ -111,7 +111,7 @@ async function conectarBotCentral() {
           setTimeout(conectarBotCentral, delay);
         } else {
           appLogger.error('⛔ Bot Central: máximo reintentos alcanzado. El servidor HTTP sigue activo.');
-          botEstado = 'detenido';
+          botEstado = 'stopped';
         }
       }
     });
@@ -138,7 +138,7 @@ async function conectarBotCentral() {
       const delay = Math.min(5000 * reintentos, 30000);
       setTimeout(conectarBotCentral, delay);
     } else {
-      botEstado = 'detenido';
+      botEstado = 'stopped';
     }
   }
 }
@@ -213,7 +213,7 @@ async function procesarMensajeBotCentral(msg) {
 }
 
 async function enviarMensajeBotCentral(numero, mensaje) {
-  if (!botSocket || botEstado !== 'conectado') {
+  if (!botSocket || botEstado !== 'connected') {
     throw new Error('Bot Central no está conectado');
   }
 
