@@ -243,10 +243,26 @@ async function reiniciarSesionSupervisor(vendedorId) {
   await iniciarSesionSupervisor(vendedorId);
 }
 
+async function limpiarSesionSupervisor(vendedorId) {
+  const appLogger = global.logger;
+  appLogger.info(`🧹 Limpiando sesión supervisor: ${vendedorId}`);
+
+  const sesion = sesiones.get(vendedorId);
+  if (sesion?.socket) {
+    try { sesion.socket.end(new Error('limpieza manual')); } catch (_) {}
+  }
+  sesiones.delete(vendedorId);
+
+  const sessionPath = path.join(SESSIONS_DIR, vendedorId);
+  fs.rmSync(sessionPath, { recursive: true, force: true });
+  appLogger.info(`🗑️ Carpeta de sesión eliminada: ${sessionPath}`);
+}
+
 module.exports = {
   iniciarSesionSupervisor,
   reiniciarSesionSupervisor,
   cerrarSesionSupervisor,
+  limpiarSesionSupervisor,
   getSesionesActivas,
   getEstadoSesion,
   getQRSesion

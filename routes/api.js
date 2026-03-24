@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { enviarMensajeBotCentral, getEstadoBotCentral, reiniciarBotCentral } = require('../sessions/bot-central');
-const { getSesionesActivas, reiniciarSesionSupervisor } = require('../sessions/supervisor');
+const { enviarMensajeBotCentral, getEstadoBotCentral, reiniciarBotCentral, limpiarSesionBotCentral } = require('../sessions/bot-central');
+const { getSesionesActivas, reiniciarSesionSupervisor, limpiarSesionSupervisor } = require('../sessions/supervisor');
 const { obtenerAlertas, marcarAlertaEnviada } = require('../services/supabase');
 
 /**
@@ -104,6 +104,28 @@ router.post('/sesion/:sessionId/reiniciar', async (req, res) => {
     res.json({ success: true, message: 'Sesión reiniciada' });
   } catch (err) {
     logger.error({ err }, `Error al reiniciar sesión ${sessionId}`);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/sesion/:sessionId/limpiar
+ * Detiene la sesión y elimina su carpeta de datos (limpieza total).
+ */
+router.delete('/sesion/:sessionId/limpiar', async (req, res) => {
+  const logger = global.logger;
+  const { sessionId } = req.params;
+
+  try {
+    if (sessionId === 'bot-central') {
+      await limpiarSesionBotCentral();
+    } else {
+      await limpiarSesionSupervisor(sessionId);
+    }
+    logger.info(`🧹 Sesión ${sessionId} limpiada via API`);
+    res.json({ success: true, message: 'Sesión limpiada' });
+  } catch (err) {
+    logger.error({ err }, `Error al limpiar sesión ${sessionId}`);
     res.status(500).json({ success: false, error: err.message });
   }
 });

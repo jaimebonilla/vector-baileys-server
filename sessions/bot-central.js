@@ -236,9 +236,26 @@ async function reiniciarBotCentral() {
   await iniciarBotCentral();
 }
 
+async function limpiarSesionBotCentral() {
+  const appLogger = global.logger;
+  appLogger.info('🧹 Limpiando sesión Bot Central...');
+
+  if (botSocket) {
+    try { botSocket.end(new Error('limpieza manual')); } catch (_) {}
+    botSocket = null;
+  }
+  reintentos = 0;
+  botEstado = 'stopped';
+  botQR = null;
+
+  fs.rmSync(SESSION_PATH, { recursive: true, force: true });
+  appLogger.info(`🗑️ Carpeta de sesión eliminada: ${SESSION_PATH}`);
+}
+
 module.exports = {
   iniciarBotCentral,
   reiniciarBotCentral,
+  limpiarSesionBotCentral,
   enviarMensajeBotCentral,
   getEstadoBotCentral,
   getQRBotCentral
