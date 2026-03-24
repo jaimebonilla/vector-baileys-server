@@ -232,8 +232,24 @@ function extraerTexto(message) {
   );
 }
 
+async function reiniciarBotCentral() {
+  const appLogger = global.logger;
+  appLogger.info('♻️ Reiniciando Bot Central...');
+
+  if (botSocket) {
+    try { botSocket.end(new Error('reinicio manual')); } catch (_) {}
+    botSocket = null;
+  }
+  reintentos = 0;
+  botEstado = null;
+  botQR = null;
+
+  await iniciarBotCentral();
+}
+
 module.exports = {
   iniciarBotCentral,
+  reiniciarBotCentral,
   enviarMensajeBotCentral,
   getEstadoBotCentral,
   getQRBotCentral

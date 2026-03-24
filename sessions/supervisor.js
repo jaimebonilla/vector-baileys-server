@@ -238,8 +238,22 @@ async function cerrarSesionSupervisor(vendedorId) {
   appLogger.info(`🗑️ Sesión supervisor ${vendedorId} eliminada`);
 }
 
+async function reiniciarSesionSupervisor(vendedorId) {
+  const appLogger = global.logger;
+  appLogger.info(`♻️ Reiniciando sesión supervisor: ${vendedorId}`);
+
+  const sesion = sesiones.get(vendedorId);
+  if (sesion?.socket) {
+    try { sesion.socket.end(new Error('reinicio manual')); } catch (_) {}
+  }
+  sesiones.delete(vendedorId);
+
+  await iniciarSesionSupervisor(vendedorId);
+}
+
 module.exports = {
   iniciarSesionSupervisor,
+  reiniciarSesionSupervisor,
   cerrarSesionSupervisor,
   getSesionesActivas,
   getEstadoSesion,

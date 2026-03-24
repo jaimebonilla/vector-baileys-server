@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { enviarMensajeBotCentral, getEstadoBotCentral } = require('../sessions/bot-central');
-const { getSesionesActivas } = require('../sessions/supervisor');
+const { enviarMensajeBotCentral, getEstadoBotCentral, reiniciarBotCentral } = require('../sessions/bot-central');
+const { getSesionesActivas, reiniciarSesionSupervisor } = require('../sessions/supervisor');
 const { obtenerAlertas, marcarAlertaEnviada } = require('../services/supabase');
 
 /**
@@ -83,6 +83,28 @@ router.post('/alertas/:id/enviada', async (req, res) => {
   } catch (err) {
     logger.error({ err }, `Error marcando alerta ${id} como enviada`);
     res.status(500).json({ error: 'Error al actualizar alerta' });
+  }
+});
+
+/**
+ * POST /api/sesion/:sessionId/reiniciar
+ * Reinicia una sesión detenida (bot-central, vendedor1, vendedor2, etc.)
+ */
+router.post('/sesion/:sessionId/reiniciar', async (req, res) => {
+  const logger = global.logger;
+  const { sessionId } = req.params;
+
+  try {
+    if (sessionId === 'bot-central') {
+      await reiniciarBotCentral();
+    } else {
+      await reiniciarSesionSupervisor(sessionId);
+    }
+    logger.info(`♻️ Sesión ${sessionId} reiniciada via API`);
+    res.json({ success: true, message: 'Sesión reiniciada' });
+  } catch (err) {
+    logger.error({ err }, `Error al reiniciar sesión ${sessionId}`);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
