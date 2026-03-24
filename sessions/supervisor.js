@@ -8,7 +8,7 @@ const {
   makeInMemoryStore
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const { guardarMensaje, obtenerOCrearConversacion } = require('../services/supabase');
+const { guardarMensaje } = require('../services/supabase');
 const { analizarMensaje } = require('../services/claude');
 
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions_data');
@@ -180,9 +180,6 @@ async function procesarMensajeSupervisor(vendedorId, msg) {
     const prospectoNumero = remitente.replace('@s.whatsapp.net', '');
     appLogger.info(`📨 Supervisor ${vendedorId} | De: ${prospectoNumero} | "${texto.substring(0, 50)}..."`);
 
-    // Obtener o crear conversación en Supabase
-    const conversacionId = await obtenerOCrearConversacion(vendedorId, prospectoNumero);
-
     // Analizar con Claude
     let analisis = null;
     try {
@@ -191,13 +188,8 @@ async function procesarMensajeSupervisor(vendedorId, msg) {
       appLogger.warn({ claudeErr }, 'Error al analizar con Claude, guardando sin análisis');
     }
 
-    // Guardar en Supabase
-    await guardarMensaje({
-      conversacion_id: conversacionId,
-      texto,
-      direccion: 'entrante',
-      analisis_claude: analisis
-    });
+    // Guardar vía proxy
+    await guardarMensaje(vendedorId, prospectoNumero, texto, true, analisis);
 
     appLogger.info(`💾 Mensaje guardado | Vendedor: ${vendedorId} | Análisis: ${analisis ? 'OK' : 'sin análisis'}`);
 

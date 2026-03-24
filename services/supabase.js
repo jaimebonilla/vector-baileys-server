@@ -64,27 +64,36 @@ async function obtenerOCrearConversacion(vendedorId, prospectoNumero) {
 }
 
 /**
- * Guarda un mensaje en la base de datos.
- * @param {object} params
- * @param {string} params.conversacion_id
- * @param {string} params.texto
- * @param {string} params.direccion - 'entrante' | 'saliente'
- * @param {object|null} params.analisis_claude
+ * Guarda un mensaje vía Edge Function proxy.
+ * @param {string} vendedorId
+ * @param {string} prospectoNumero
+ * @param {string} texto
+ * @param {boolean} esEntrante
+ * @param {object|null} analisis
  */
-async function guardarMensaje({ conversacion_id, texto, direccion, analisis_claude }) {
-  const db = getSupabase();
+async function guardarMensaje(vendedorId, prospectoNumero, texto, esEntrante, analisis) {
+  const response = await fetch(
+    'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy/guardar-mensaje',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        vendedor_id: vendedorId,
+        prospecto_numero: prospectoNumero,
+        texto: texto,
+        direccion: esEntrante ? 'entrante' : 'saliente',
+        analisis_claude: analisis
+      })
+    }
+  );
 
-  const { error } = await db
-    .from('mensajes')
-    .insert({
-      conversacion_id,
-      texto,
-      direccion,
-      analisis_claude,
-      timestamp: new Date().toISOString()
-    });
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.error || 'Error guardando mensaje');
+  }
 
-  if (error) throw error;
+  console.log('✅ Mensaje guardado:', result);
+  return result;
 }
 
 /**

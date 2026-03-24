@@ -7,7 +7,7 @@ const {
   fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const { obtenerContextoVendedor, guardarMensaje, obtenerOCrearConversacion } = require('../services/supabase');
+const { obtenerContextoVendedor, guardarMensaje } = require('../services/supabase');
 const { generarRespuesta } = require('../services/claude');
 
 const SESSION_PATH = path.join(process.cwd(), 'sessions_data', 'bot-central');
@@ -188,21 +188,10 @@ async function procesarMensajeBotCentral(msg) {
     // Enviar respuesta al gerente
     await botSocket.sendMessage(msg.key.remoteJid, { text: respuesta });
 
-    // Guardar en Supabase si hay vendedor identificado
+    // Guardar vía proxy si hay vendedor identificado
     if (vendedorId) {
-      const conversacionId = await obtenerOCrearConversacion(vendedorId, remitente);
-      await guardarMensaje({
-        conversacion_id: conversacionId,
-        texto,
-        direccion: 'entrante',
-        analisis_claude: null
-      });
-      await guardarMensaje({
-        conversacion_id: conversacionId,
-        texto: respuesta,
-        direccion: 'saliente',
-        analisis_claude: null
-      });
+      await guardarMensaje(vendedorId, remitente, texto, true, null);
+      await guardarMensaje(vendedorId, remitente, respuesta, false, null);
     }
 
     appLogger.info(`✉️ Respuesta enviada al gerente ${remitente}`);
