@@ -174,7 +174,57 @@ async function conectarBotCentral() {
 
         console.log('✅ Bot Central | Mensaje del gerente, procesando...');
 
-        await procesarMensajeBotCentral(m);
+        try {
+          // Extraer texto del mensaje
+          const textoMensaje = m.message?.conversation ||
+                               m.message?.extendedTextMessage?.text ||
+                               '';
+
+          if (!textoMensaje) continue;
+
+          // Consultar conversaciones en Supabase vía Edge Function
+          const response = await fetch('https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy/consultar-conversaciones', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+
+          const { conversaciones } = await response.json();
+
+          // Preparar contexto para Claude
+          const contexto = `Tienes acceso a las conversaciones de los vendedores:
+${JSON.stringify(conversaciones, null, 2)}
+Pregunta del gerente: ${textoMensaje}
+Responde de forma concisa y profesional con la información solicitada.`;
+
+          // Llamar a Claude API
+          const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': process.env.ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01'
+            },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 1024,
+              messages: [{ role: 'user', content: contexto }]
+            })
+          });
+
+          const claudeData = await claudeResponse.json();
+          const respuesta = claudeData.content[0].text;
+
+          // Enviar respuesta por WhatsApp
+          await sock.sendMessage(numeroRemite, { text: respuesta });
+
+          console.log('✅ Bot Central | Respuesta enviada');
+        } catch (error) {
+          console.error('❌ Bot Central | ERROR:', error);
+          await sock.sendMessage(numeroRemite, {
+            text: 'Disculpa, hubo un error procesando tu solicitud.'
+          });
+        }
       }
     });
 
