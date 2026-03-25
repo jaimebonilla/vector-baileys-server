@@ -154,10 +154,12 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         // Extraer el número real del remitente
         // participant existe cuando el mensaje viene de un chat individual
         // remoteJid es el respaldo
-        const numeroRemite = msg.key.participant || msg.key.remoteJid;
+        // El número real está en senderPn (formato: 50672120211@s.whatsapp.net)
+        const numeroRemite = msg.key.senderPn || msg.key.participant || msg.key.remoteJid;
         console.log('📱 Mensaje | key completo:', JSON.stringify(msg.key, null, 2));
         console.log('📱 Mensaje | remoteJid:', msg.key.remoteJid);
         console.log('📱 Mensaje | participant:', msg.key.participant);
+        console.log('📱 Mensaje | senderPn:', msg.key.senderPn);
         console.log('📱 Mensaje | fromMe:', msg.key.fromMe);
         console.log('📱 Mensaje | Número extraído:', numeroRemite);
 
