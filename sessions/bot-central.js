@@ -14,6 +14,11 @@ const SESSION_PATH = path.join(process.cwd(), 'sessions_data', 'bot-central');
 const MAX_REINTENTOS = 3;
 const logger = pino({ level: 'silent' });
 
+function normalizarNumero(numero) {
+  // Elimina todo excepto dígitos
+  return numero.replace(/\D/g, '');
+}
+
 // Estado del bot central
 let botSocket = null;
 let botEstado = null;
@@ -118,14 +123,44 @@ async function conectarBotCentral() {
 
     // Procesar mensajes entrantes (solo de gerentes autorizados)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      console.log('📱 Bot Central | Mensaje recibido (raw):', JSON.stringify(messages, null, 2));
+
       if (type !== 'notify') return;
 
-      for (const msg of messages) {
-        if (msg.key.fromMe || !msg.message) continue;
-        // Ignorar grupos
-        if (msg.key.remoteJid.endsWith('@g.us')) continue;
+      for (const m of messages) {
+        if (!m.message) continue;
 
-        await procesarMensajeBotCentral(msg);
+        const numeroRemite = m.key.remoteJid;
+        console.log('📱 Bot Central | De:', numeroRemite);
+
+        const numeroNormalizado = normalizarNumero(numeroRemite);
+        console.log('📱 Bot Central | Número normalizado:', numeroNormalizado);
+
+        const GERENTES_NUMEROS = getGerentesAutorizados();
+        console.log('📱 Bot Central | Números autorizados:', GERENTES_NUMEROS);
+
+        const esAutorizado = GERENTES_NUMEROS.some(n => {
+          const nNormalizado = normalizarNumero(n);
+          console.log('📱 Bot Central | Comparando:', numeroNormalizado, 'con', nNormalizado);
+          return numeroNormalizado === nNormalizado ||
+                 numeroNormalizado.includes(nNormalizado) ||
+                 numeroNormalizado.endsWith(nNormalizado);
+        });
+
+        console.log('📱 Bot Central | ¿Es autorizado?:', esAutorizado);
+
+        if (!esAutorizado) {
+          console.log('❌ Bot Central | Mensaje de número no autorizado, ignorando');
+          continue;
+        }
+
+        console.log('✅ Bot Central | Mensaje del gerente, procesando...');
+
+        if (m.key.fromMe) continue;
+        // Ignorar grupos
+        if (m.key.remoteJid.endsWith('@g.us')) continue;
+
+        await procesarMensajeBotCentral(m);
       }
     });
 
@@ -150,8 +185,13 @@ async function procesarMensajeBotCentral(msg) {
     const remitente = msg.key.remoteJid.replace('@s.whatsapp.net', '');
     const gerentesAutorizados = getGerentesAutorizados();
 
-    // Solo procesar mensajes de gerentes autorizados
-    if (!gerentesAutorizados.includes(remitente)) {
+    // Solo procesar mensajes de gerentes autorizados (con normalización de número)
+    const remitenteNorm = normalizarNumero(remitente);
+    const esGerente = gerentesAutorizados.some(n => {
+      const nNorm = normalizarNumero(n);
+      return remitenteNorm === nNorm || remitenteNorm.includes(nNorm) || remitenteNorm.endsWith(nNorm);
+    });
+    if (!esGerente) {
       appLogger.debug(`Bot Central: mensaje ignorado de número no autorizado ${remitente}`);
       return;
     }
