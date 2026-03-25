@@ -12,7 +12,7 @@ const { guardarMensaje } = require('../services/supabase');
 const { analizarMensaje } = require('../services/claude');
 
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions_data');
-const MAX_REINTENTOS = 3;
+const MAX_REINTENTOS = 10;
 const logger = pino({ level: 'silent' }); // Logger silencioso para Baileys
 
 // Mapa de sesiones activas: vendedorId -> { socket, estado, qr, reintentos }
@@ -132,7 +132,7 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         }
 
         sesion.reintentos++;
-        const delay = Math.min(5000 * sesion.reintentos, 30000);
+        const delay = 30000;
         appLogger.warn(`🔄 Supervisor ${vendedorId} desconectado (código ${codigo}). Reintento ${sesion.reintentos}/${MAX_REINTENTOS} en ${delay / 1000}s`);
 
         if (sesion.reintentos < MAX_REINTENTOS) {

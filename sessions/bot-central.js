@@ -11,7 +11,7 @@ const { obtenerContextoVendedor, guardarMensaje } = require('../services/supabas
 const { generarRespuesta } = require('../services/claude');
 
 const SESSION_PATH = path.join(process.cwd(), 'sessions_data', 'bot-central');
-const MAX_REINTENTOS = 3;
+const MAX_REINTENTOS = 10;
 const logger = pino({ level: 'silent' });
 
 function normalizarNumero(numero) {
@@ -109,7 +109,7 @@ async function conectarBotCentral() {
         }
 
         reintentos++;
-        const delay = Math.min(5000 * reintentos, 30000);
+        const delay = 30000;
         appLogger.warn(`🔄 Bot Central desconectado (código ${codigo}). Reintento ${reintentos}/${MAX_REINTENTOS} en ${delay / 1000}s`);
 
         if (reintentos < MAX_REINTENTOS) {

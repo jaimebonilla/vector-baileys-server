@@ -1,8 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const QRCode = require('qrcode');
-const { getEstadoSesion, getQRSesion, iniciarSesionSupervisor } = require('../sessions/supervisor');
-const { getEstadoBotCentral, getQRBotCentral } = require('../sessions/bot-central');
+const { getEstadoSesion, getQRSesion, iniciarSesionSupervisor, reiniciarSesionSupervisor } = require('../sessions/supervisor');
+const { getEstadoBotCentral, getQRBotCentral, reiniciarBotCentral } = require('../sessions/bot-central');
+
+function obtenerEstadoYQR(sessionId) {
+  if (sessionId === 'bot-central') {
+    return { estado: getEstadoBotCentral(), qrString: getQRBotCentral() };
+  }
+  return { estado: getEstadoSesion(sessionId), qrString: getQRSesion(sessionId) };
+}
 
 /**
  * GET /api/qr/:sessionId
@@ -14,15 +21,7 @@ router.get('/qr/:sessionId', async (req, res) => {
   const logger = global.logger;
 
   try {
-    let estado, qrString;
-
-    if (sessionId === 'bot-central') {
-      estado = getEstadoBotCentral();
-      qrString = getQRBotCentral();
-    } else {
-      estado = getEstadoSesion(sessionId);
-      qrString = getQRSesion(sessionId);
-    }
+    let { estado, qrString } = obtenerEstadoYQR(sessionId);
 
     // Si no existe la sesión aún
     if (!estado) {
@@ -35,41 +34,38 @@ router.get('/qr/:sessionId', async (req, res) => {
       });
     }
 
+    // Si está detenida, reiniciar automáticamente y esperar QR
+    if (estado === 'stopped') {
+      console.log(`Sesión ${sessionId} detenida, reiniciando automáticamente...`);
+      if (sessionId === 'bot-central') {
+        await reiniciarBotCentral();
+      } else {
+        await reiniciarSesionSupervisor(sessionId);
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      const actualizado = obtenerEstadoYQR(sessionId);
+      estado = actualizado.estado;
+      qrString = actualizado.qrString;
+    }
+
     // Si ya está conectado
     if (estado === 'connected') {
-      return res.json({
-        sessionId,
-        status: 'connected',
-        qr: null
-      });
+      return res.json({ sessionId, status: 'connected', qr: null });
     }
 
     // Si hay QR disponible, convertirlo a base64
     if (qrString) {
       try {
         const qrBase64 = await QRCode.toDataURL(qrString);
-        return res.json({
-          sessionId,
-          status: 'waiting_qr',
-          qr: qrBase64
-        });
+        return res.json({ sessionId, status: 'waiting_qr', qr: qrBase64 });
       } catch (qrErr) {
         logger.error({ qrErr }, 'Error al generar imagen QR');
-        return res.json({
-          sessionId,
-          status: 'waiting_qr',
-          qr: null,
-          qrRaw: qrString
-        });
+        return res.json({ sessionId, status: 'waiting_qr', qr: null, qrRaw: qrString });
       }
     }
 
     // Estado intermedio (conectando, reconectando, etc.)
-    return res.json({
-      sessionId,
-      status: estado,
-      qr: null
-    });
+    return res.json({ sessionId, status: estado, qr: null });
 
   } catch (err) {
     logger.error({ err }, `Error en GET /api/qr/${sessionId}`);
