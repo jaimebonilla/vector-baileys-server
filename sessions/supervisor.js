@@ -149,8 +149,23 @@ async function conectarSupervisor(vendedorId, sessionPath) {
       if (type !== 'notify') return;
 
       for (const msg of messages) {
-        // Ignorar mensajes propios o sin contenido
-        if (msg.key.fromMe || !msg.message) continue;
+        if (!msg.message) continue;
+
+        // Extraer el número real del remitente
+        // participant existe cuando el mensaje viene de un chat individual
+        // remoteJid es el respaldo
+        const numeroRemite = msg.key.participant || msg.key.remoteJid;
+        console.log('📱 Mensaje | key completo:', JSON.stringify(msg.key, null, 2));
+        console.log('📱 Mensaje | remoteJid:', msg.key.remoteJid);
+        console.log('📱 Mensaje | participant:', msg.key.participant);
+        console.log('📱 Mensaje | fromMe:', msg.key.fromMe);
+        console.log('📱 Mensaje | Número extraído:', numeroRemite);
+
+        // Ignorar mensajes propios
+        if (msg.key.fromMe) {
+          console.log('⏭️ Mensaje propio, ignorando');
+          continue;
+        }
 
         await procesarMensajeSupervisor(vendedorId, msg);
       }

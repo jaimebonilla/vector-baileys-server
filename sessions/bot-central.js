@@ -130,8 +130,24 @@ async function conectarBotCentral() {
       for (const m of messages) {
         if (!m.message) continue;
 
-        const numeroRemite = m.key.remoteJid;
-        console.log('📱 Bot Central | De:', numeroRemite);
+        // Extraer el número real del remitente
+        // participant existe cuando el mensaje viene de un chat individual
+        // remoteJid es el respaldo
+        const numeroRemite = m.key.participant || m.key.remoteJid;
+        console.log('📱 Mensaje | key completo:', JSON.stringify(m.key, null, 2));
+        console.log('📱 Mensaje | remoteJid:', m.key.remoteJid);
+        console.log('📱 Mensaje | participant:', m.key.participant);
+        console.log('📱 Mensaje | fromMe:', m.key.fromMe);
+        console.log('📱 Mensaje | Número extraído:', numeroRemite);
+
+        // Ignorar mensajes propios
+        if (m.key.fromMe) {
+          console.log('⏭️ Mensaje propio, ignorando');
+          continue;
+        }
+
+        // Ignorar grupos
+        if (m.key.remoteJid.endsWith('@g.us')) continue;
 
         const numeroNormalizado = normalizarNumero(numeroRemite);
         console.log('📱 Bot Central | Número normalizado:', numeroNormalizado);
@@ -155,10 +171,6 @@ async function conectarBotCentral() {
         }
 
         console.log('✅ Bot Central | Mensaje del gerente, procesando...');
-
-        if (m.key.fromMe) continue;
-        // Ignorar grupos
-        if (m.key.remoteJid.endsWith('@g.us')) continue;
 
         await procesarMensajeBotCentral(m);
       }
