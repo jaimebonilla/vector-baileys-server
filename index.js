@@ -68,14 +68,16 @@ async function iniciarBaileys() {
     logger.error({ err }, '❌ Error al iniciar Bot Central - el servidor sigue activo');
   }
 
-  // Sesiones de supervisores predeterminadas
-  for (const vendedorId of ['vendedor1', 'vendedor2']) {
-    try {
-      await iniciarSesionSupervisor(vendedorId);
-    } catch (err) {
-      logger.error({ err }, `❌ Error al iniciar sesión de ${vendedorId} - el servidor sigue activo`);
+  // Sesiones de supervisores predeterminadas — en paralelo para que un fallo no bloquee al resto
+  const vendedores = ['vendedor1', 'vendedor2'];
+  const resultados = await Promise.allSettled(
+    vendedores.map(vendedorId => iniciarSesionSupervisor(vendedorId))
+  );
+  resultados.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      logger.error({ err: r.reason }, `❌ Error al iniciar sesión de ${vendedores[i]} - el servidor sigue activo`);
     }
-  }
+  });
 
   // Cron de alertas
   try {
@@ -85,7 +87,7 @@ async function iniciarBaileys() {
     logger.error({ err }, '❌ Error al iniciar cron de alertas');
   }
 
-  logger.info('💡 Sesiones Bot Central, vendedor1 y vendedor2 iniciadas automáticamente');
+  logger.info(`💡 Sesiones iniciadas: bot-central + ${vendedores.join(', ')}`);
 }
 
 module.exports = app;
