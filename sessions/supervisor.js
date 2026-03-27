@@ -193,13 +193,20 @@ async function procesarMensajeSupervisor(vendedorId, msg, direccion) {
     const texto = extraerTexto(msg.message);
     if (!texto) return;
 
-    const prospectoNumero = remitente.replace('@s.whatsapp.net', '');
-    appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${prospectoNumero} | "${texto.substring(0, 50)}..."`);
+    const esDelVendedor = direccion === 'saliente';
+    // Para entrantes: senderPn tiene el número real del cliente
+    // Para salientes: remoteJid tiene el número del prospecto al que el vendedor escribió
+    const numeroProspecto = esDelVendedor
+      ? remitente
+      : (msg.key.senderPn || remitente);
+    const numeroLimpio = numeroProspecto.replace('@s.whatsapp.net', '').replace('@lid', '');
+    console.log(`📱 Supervisor ${vendedorId} | Guardando con número: ${numeroLimpio}`);
+    appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio} | "${texto.substring(0, 50)}..."`);
 
     // Guardar mensaje (tanto entrantes como salientes)
     await guardarMensaje(
       vendedorId,
-      prospectoNumero,
+      numeroLimpio,
       texto,
       direccion === 'entrante', // true si es entrante, false si es saliente
       null // análisis de Claude (lo implementaremos después)
