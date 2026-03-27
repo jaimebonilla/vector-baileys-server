@@ -194,13 +194,19 @@ async function procesarMensajeSupervisor(vendedorId, msg, direccion) {
     if (!texto) return;
 
     const esDelVendedor = direccion === 'saliente';
-    // Para entrantes: senderPn tiene el número real del cliente
-    // Para salientes: remoteJid tiene el número del prospecto al que el vendedor escribió
-    const numeroProspecto = esDelVendedor
-      ? remitente
-      : (msg.key.senderPn || remitente);
-    const numeroLimpio = numeroProspecto.replace('@s.whatsapp.net', '').replace('@lid', '');
-    console.log(`📱 Supervisor ${vendedorId} | Guardando con número: ${numeroLimpio}`);
+    let numeroProspecto;
+    if (esDelVendedor) {
+      // Mensaje saliente: el vendedor le responde a alguien — destinatario en remoteJid
+      numeroProspecto = msg.key.remoteJid;
+    } else {
+      // Mensaje entrante: el cliente escribe — número real en senderPn
+      numeroProspecto = msg.key.senderPn || msg.key.remoteJid;
+    }
+    const numeroLimpio = numeroProspecto
+      .replace('@s.whatsapp.net', '')
+      .replace('@lid', '')
+      .replace('@c.us', '');
+    console.log(`📱 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio}`);
     appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio} | "${texto.substring(0, 50)}..."`);
 
     // Guardar mensaje (tanto entrantes como salientes)
