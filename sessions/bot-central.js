@@ -216,14 +216,14 @@ Responde de forma concisa y profesional con la información solicitada.`;
           const respuesta = claudeData.content[0].text;
 
           // Enviar respuesta por WhatsApp
-          await sock.sendMessage(numeroRemite, { text: respuesta });
+          await sock.sendMessage(numeroRemite, { text: respuesta }, { ephemeralExpiration: 0 });
 
           console.log('✅ Bot Central | Respuesta enviada');
         } catch (error) {
           console.error('❌ Bot Central | ERROR:', error);
           await sock.sendMessage(numeroRemite, {
             text: 'Disculpa, hubo un error procesando tu solicitud.'
-          });
+          }, { ephemeralExpiration: 0 });
         }
       }
     });
@@ -290,7 +290,7 @@ async function procesarMensajeBotCentral(msg) {
     const respuesta = await generarRespuesta({ pregunta, contexto, vendedorId });
 
     // Enviar respuesta al gerente
-    await botSocket.sendMessage(msg.key.remoteJid, { text: respuesta });
+    await botSocket.sendMessage(msg.key.remoteJid, { text: respuesta }, { ephemeralExpiration: 0 });
 
     // Guardar vía proxy si hay vendedor identificado
     if (vendedorId) {
@@ -311,7 +311,7 @@ async function enviarMensajeBotCentral(numero, mensaje) {
   }
 
   const jid = numero.includes('@') ? numero : `${numero}@s.whatsapp.net`;
-  await botSocket.sendMessage(jid, { text: mensaje });
+  await botSocket.sendMessage(jid, { text: mensaje }, { ephemeralExpiration: 0 });
 }
 
 function extraerTexto(message) {
