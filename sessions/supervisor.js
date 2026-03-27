@@ -158,6 +158,12 @@ async function conectarSupervisor(vendedorId, sessionPath) {
 
         const remoteJid = msg.key.remoteJid;
 
+        // A) Filtrar estados de WhatsApp y broadcasts (no son conversaciones reales)
+        if (remoteJid.includes('broadcast') || remoteJid === 'status@broadcast') {
+          console.log(`⏭️ ${vendedorId} | Ignorando estado/broadcast: ${remoteJid}`);
+          continue;
+        }
+
         // Ignorar grupos
         if (remoteJid.endsWith('@g.us')) continue;
 
@@ -175,26 +181,35 @@ async function conectarSupervisor(vendedorId, sessionPath) {
           numeroProspecto = msg.key.senderPn || remoteJid;
 
           // Guardar mapeo @lid → número real para futuros mensajes salientes
-          if (remoteJid.includes('@lid')) {
-            conversacionesMap.set(remoteJid, numeroProspecto);
-            console.log(`📋 ${vendedorId} | Mapeando: ${remoteJid} → ${numeroProspecto}`);
+          // Solo si el número resuelto es un número real (@s.whatsapp.net), no un @lid
+          if (remoteJid.includes('@lid') && numeroProspecto.includes('@s.whatsapp.net')) {
+            // C) No sobrescribir si ya existe un mapeo válido para esta conversación
+            if (!conversacionesMap.has(remoteJid)) {
+              conversacionesMap.set(remoteJid, numeroProspecto);
+              console.log(`📋 ${vendedorId} | Nuevo mapeo: ${remoteJid} → ${numeroProspecto}`);
+            } else {
+              console.log(`📋 ${vendedorId} | Mapeo ya existe: ${remoteJid} → ${conversacionesMap.get(remoteJid)}`);
+            }
           }
 
         } else {
           // ── MENSAJE SALIENTE ──────────────────────────────────────────
+          console.log(`📤 ${vendedorId} | Mensaje SALIENTE detectado`);
+          console.log(`📤 ${vendedorId} | remoteJid: ${remoteJid}`);
+
           if (remoteJid.includes('@s.whatsapp.net')) {
             // remoteJid ya contiene el número real
             numeroProspecto = remoteJid;
             console.log(`📱 ${vendedorId} | Saliente directo: ${remoteJid}`);
 
           } else if (remoteJid.includes('@lid')) {
-            // 1. Buscar en el Map en memoria
+            // B) Logs detallados para debug del mapeo @lid
+            console.log(`🔍 ${vendedorId} | Buscando en Map para @lid: ${remoteJid}`);
             numeroProspecto = conversacionesMap.get(remoteJid);
+            console.log(`✅ ${vendedorId} | Resultado del Map: ${numeroProspecto || 'NO ENCONTRADO'}`);
 
-            if (numeroProspecto) {
-              console.log(`✅ ${vendedorId} | Mapeo en memoria: ${remoteJid} → ${numeroProspecto}`);
-            } else {
-              // 2. Fallback: consultar Supabase
+            if (!numeroProspecto) {
+              // Fallback: consultar Supabase
               console.log(`🔍 ${vendedorId} | Buscando en BD para: ${remoteJid}`);
               try {
                 const response = await fetch(`${SUPABASE_PROXY_URL}/buscar-prospecto-por-lid`, {
@@ -213,7 +228,7 @@ async function conectarSupervisor(vendedorId, sessionPath) {
               }
             }
 
-            // 3. Sin número disponible → omitir
+            // Sin número disponible → omitir
             if (!numeroProspecto) {
               console.log(`⚠️ ${vendedorId} | No se pudo determinar prospecto para ${remoteJid}, ignorando`);
               continue;
