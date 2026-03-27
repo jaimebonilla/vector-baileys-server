@@ -195,13 +195,37 @@ async function procesarMensajeSupervisor(vendedorId, msg, direccion) {
 
     const esDelVendedor = direccion === 'saliente';
     let numeroProspecto;
+
     if (esDelVendedor) {
-      // Mensaje saliente: el vendedor le responde a alguien — destinatario en remoteJid
-      numeroProspecto = msg.key.remoteJid;
+      // Log completo para debug de mensajes salientes
+      console.log('📤 Mensaje saliente completo:', JSON.stringify(msg, null, 2));
+
+      // Intentar obtener el número del mensaje citado/respondido
+      const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+      const participante = contextInfo?.participant;
+
+      if (participante && participante.includes('@s.whatsapp.net')) {
+        // Respuesta a un mensaje: el participante es el número real del cliente
+        numeroProspecto = participante;
+        console.log('📱 Mensaje saliente | Respuesta a:', participante);
+      } else if (msg.key.remoteJid.includes('@s.whatsapp.net')) {
+        // remoteJid válido con número real
+        numeroProspecto = msg.key.remoteJid;
+        console.log('📱 Mensaje saliente | remoteJid directo:', msg.key.remoteJid);
+      } else if (msg.key.remoteJid.includes('@lid')) {
+        // @lid: ID opaco de conversación, no podemos extraer el número aún
+        console.log('⚠️ Mensaje saliente con @lid:', msg.key.remoteJid);
+        console.log('📝 contextInfo disponible:', JSON.stringify(contextInfo, null, 2));
+        return; // Omitir hasta resolver cómo mapear @lid al número real
+      } else {
+        numeroProspecto = msg.key.remoteJid;
+        console.log('📱 Mensaje saliente | remoteJid fallback:', msg.key.remoteJid);
+      }
     } else {
       // Mensaje entrante: el cliente escribe — número real en senderPn
       numeroProspecto = msg.key.senderPn || msg.key.remoteJid;
     }
+
     const numeroLimpio = numeroProspecto
       .replace('@s.whatsapp.net', '')
       .replace('@lid', '')
