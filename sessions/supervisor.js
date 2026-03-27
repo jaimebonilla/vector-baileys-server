@@ -13,9 +13,10 @@ const { analizarMensaje } = require('../services/claude');
 
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions_data');
 const MAX_REINTENTOS = 10;
+const SUPABASE_PROXY_URL = 'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy';
 const logger = pino({ level: 'silent' }); // Logger silencioso para Baileys
 
-// Mapa de sesiones activas: vendedorId -> { socket, estado, qr, reintentos }
+// Mapa de sesiones activas: vendedorId -> { socket, estado, qr, reintentos, conversacionesMap }
 const sesiones = new Map();
 
 function getSesionesActivas() {
@@ -53,13 +54,14 @@ async function iniciarSesionSupervisor(vendedorId) {
   const sessionPath = path.join(SESSIONS_DIR, `supervisor-${vendedorId}`);
   fs.mkdirSync(sessionPath, { recursive: true });
 
-  // Inicializar entrada en el mapa
+  // Inicializar entrada en el mapa — conservar conversacionesMap si ya existía
   sesiones.set(vendedorId, {
     estado: 'iniciando',
     qr: null,
     reintentos: existente ? existente.reintentos : 0,
     socket: null,
-    conectadoEn: null
+    conectadoEn: null,
+    conversacionesMap: existente?.conversacionesMap || new Map() // persistir entre reconexiones
   });
 
   appLogger.info(`🟡 Iniciando sesión supervisor: ${vendedorId}`);
@@ -95,6 +97,9 @@ async function conectarSupervisor(vendedorId, sessionPath) {
     sesion.socket = sock;
     sesion.estado = 'conectando';
     sesion.qr = null;
+
+    // Map local por vendedor: "@lid" → número real del prospecto
+    const conversacionesMap = sesion.conversacionesMap;
 
     // Guardar credenciales
     sock.ev.on('creds.update', saveCreds);
@@ -144,31 +149,104 @@ async function conectarSupervisor(vendedorId, sessionPath) {
       }
     });
 
-    // Procesar mensajes entrantes (solo lectura)
+    // Procesar mensajes (entrantes y salientes)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
 
       for (const msg of messages) {
         if (!msg.message) continue;
 
-        // Extraer el número real del remitente
-        // participant existe cuando el mensaje viene de un chat individual
-        // remoteJid es el respaldo
-        // El número real está en senderPn (formato: 50672120211@s.whatsapp.net)
-        const numeroRemite = msg.key.senderPn || msg.key.participant || msg.key.remoteJid;
-        console.log('📱 Mensaje | key completo:', JSON.stringify(msg.key, null, 2));
-        console.log('📱 Mensaje | remoteJid:', msg.key.remoteJid);
-        console.log('📱 Mensaje | participant:', msg.key.participant);
-        console.log('📱 Mensaje | senderPn:', msg.key.senderPn);
-        console.log('📱 Mensaje | fromMe:', msg.key.fromMe);
-        console.log('📱 Mensaje | Número extraído:', numeroRemite);
+        const remoteJid = msg.key.remoteJid;
 
-        // Determinar dirección del mensaje
+        // Ignorar grupos
+        if (remoteJid.endsWith('@g.us')) continue;
+
+        // Extraer texto
+        const texto = extraerTexto(msg.message);
+        if (!texto) continue;
+
         const esDelVendedor = msg.key.fromMe === true;
         const direccion = esDelVendedor ? 'saliente' : 'entrante';
-        console.log(`📱 Supervisor ${vendedorId} | Mensaje ${direccion}`);
+        let numeroProspecto;
 
-        await procesarMensajeSupervisor(vendedorId, msg, direccion);
+        if (!esDelVendedor) {
+          // ── MENSAJE ENTRANTE ──────────────────────────────────────────
+          // senderPn tiene el número real del cliente
+          numeroProspecto = msg.key.senderPn || remoteJid;
+
+          // Guardar mapeo @lid → número real para futuros mensajes salientes
+          if (remoteJid.includes('@lid')) {
+            conversacionesMap.set(remoteJid, numeroProspecto);
+            console.log(`📋 ${vendedorId} | Mapeando: ${remoteJid} → ${numeroProspecto}`);
+          }
+
+        } else {
+          // ── MENSAJE SALIENTE ──────────────────────────────────────────
+          if (remoteJid.includes('@s.whatsapp.net')) {
+            // remoteJid ya contiene el número real
+            numeroProspecto = remoteJid;
+            console.log(`📱 ${vendedorId} | Saliente directo: ${remoteJid}`);
+
+          } else if (remoteJid.includes('@lid')) {
+            // 1. Buscar en el Map en memoria
+            numeroProspecto = conversacionesMap.get(remoteJid);
+
+            if (numeroProspecto) {
+              console.log(`✅ ${vendedorId} | Mapeo en memoria: ${remoteJid} → ${numeroProspecto}`);
+            } else {
+              // 2. Fallback: consultar Supabase
+              console.log(`🔍 ${vendedorId} | Buscando en BD para: ${remoteJid}`);
+              try {
+                const response = await fetch(`${SUPABASE_PROXY_URL}/buscar-prospecto-por-lid`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ vendedor_id: vendedorId, lid_id: remoteJid })
+                });
+                const { prospecto_numero } = await response.json();
+                if (prospecto_numero) {
+                  numeroProspecto = prospecto_numero;
+                  conversacionesMap.set(remoteJid, numeroProspecto); // cachear
+                  console.log(`✅ ${vendedorId} | Encontrado en BD: ${remoteJid} → ${numeroProspecto}`);
+                }
+              } catch (err) {
+                console.error(`❌ ${vendedorId} | Error buscando en BD:`, err.message);
+              }
+            }
+
+            // 3. Sin número disponible → omitir
+            if (!numeroProspecto) {
+              console.log(`⚠️ ${vendedorId} | No se pudo determinar prospecto para ${remoteJid}, ignorando`);
+              continue;
+            }
+
+          } else {
+            // Otro formato desconocido
+            numeroProspecto = remoteJid;
+            console.log(`📱 ${vendedorId} | Saliente fallback: ${remoteJid}`);
+          }
+        }
+
+        // Limpiar formato del número
+        const numeroLimpio = numeroProspecto
+          .replace('@s.whatsapp.net', '')
+          .replace('@lid', '')
+          .replace('@c.us', '');
+
+        console.log(`📱 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio}`);
+        appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio} | "${texto.substring(0, 50)}..."`);
+
+        try {
+          await guardarMensaje(
+            vendedorId,
+            numeroLimpio,
+            texto,
+            direccion === 'entrante',
+            null // análisis de Claude (implementar después)
+          );
+          appLogger.info(`💾 Guardado | Vendedor: ${vendedorId} | Dirección: ${direccion}`);
+        } catch (err) {
+          appLogger.error({ err }, `Error guardando mensaje supervisor ${vendedorId}`);
+        }
       }
     });
 
@@ -178,74 +256,6 @@ async function conectarSupervisor(vendedorId, sessionPath) {
       sesion.estado = 'error';
       sesion.reintentos++;
     }
-  }
-}
-
-async function procesarMensajeSupervisor(vendedorId, msg, direccion) {
-  const appLogger = global.logger;
-
-  try {
-    const remitente = msg.key.remoteJid;
-    // Ignorar grupos
-    if (remitente.endsWith('@g.us')) return;
-
-    // Extraer texto del mensaje
-    const texto = extraerTexto(msg.message);
-    if (!texto) return;
-
-    const esDelVendedor = direccion === 'saliente';
-    let numeroProspecto;
-
-    if (esDelVendedor) {
-      // Log completo para debug de mensajes salientes
-      console.log('📤 Mensaje saliente completo:', JSON.stringify(msg, null, 2));
-
-      // Intentar obtener el número del mensaje citado/respondido
-      const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
-      const participante = contextInfo?.participant;
-
-      if (participante && participante.includes('@s.whatsapp.net')) {
-        // Respuesta a un mensaje: el participante es el número real del cliente
-        numeroProspecto = participante;
-        console.log('📱 Mensaje saliente | Respuesta a:', participante);
-      } else if (msg.key.remoteJid.includes('@s.whatsapp.net')) {
-        // remoteJid válido con número real
-        numeroProspecto = msg.key.remoteJid;
-        console.log('📱 Mensaje saliente | remoteJid directo:', msg.key.remoteJid);
-      } else if (msg.key.remoteJid.includes('@lid')) {
-        // @lid: ID opaco de conversación, no podemos extraer el número aún
-        console.log('⚠️ Mensaje saliente con @lid:', msg.key.remoteJid);
-        console.log('📝 contextInfo disponible:', JSON.stringify(contextInfo, null, 2));
-        return; // Omitir hasta resolver cómo mapear @lid al número real
-      } else {
-        numeroProspecto = msg.key.remoteJid;
-        console.log('📱 Mensaje saliente | remoteJid fallback:', msg.key.remoteJid);
-      }
-    } else {
-      // Mensaje entrante: el cliente escribe — número real en senderPn
-      numeroProspecto = msg.key.senderPn || msg.key.remoteJid;
-    }
-
-    const numeroLimpio = numeroProspecto
-      .replace('@s.whatsapp.net', '')
-      .replace('@lid', '')
-      .replace('@c.us', '');
-    console.log(`📱 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio}`);
-    appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio} | "${texto.substring(0, 50)}..."`);
-
-    // Guardar mensaje (tanto entrantes como salientes)
-    await guardarMensaje(
-      vendedorId,
-      numeroLimpio,
-      texto,
-      direccion === 'entrante', // true si es entrante, false si es saliente
-      null // análisis de Claude (lo implementaremos después)
-    );
-
-    appLogger.info(`💾 Mensaje guardado | Vendedor: ${vendedorId} | Dirección: ${direccion}`);
-
-  } catch (err) {
-    appLogger.error({ err }, `Error procesando mensaje supervisor ${vendedorId}`);
   }
 }
 
