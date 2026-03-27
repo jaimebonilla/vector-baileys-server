@@ -163,13 +163,12 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         console.log('📱 Mensaje | fromMe:', msg.key.fromMe);
         console.log('📱 Mensaje | Número extraído:', numeroRemite);
 
-        // Ignorar mensajes propios
-        if (msg.key.fromMe) {
-          console.log('⏭️ Mensaje propio, ignorando');
-          continue;
-        }
+        // Determinar dirección del mensaje
+        const esDelVendedor = msg.key.fromMe === true;
+        const direccion = esDelVendedor ? 'saliente' : 'entrante';
+        console.log(`📱 Supervisor ${vendedorId} | Mensaje ${direccion}`);
 
-        await procesarMensajeSupervisor(vendedorId, msg);
+        await procesarMensajeSupervisor(vendedorId, msg, direccion);
       }
     });
 
@@ -182,7 +181,7 @@ async function conectarSupervisor(vendedorId, sessionPath) {
   }
 }
 
-async function procesarMensajeSupervisor(vendedorId, msg) {
+async function procesarMensajeSupervisor(vendedorId, msg, direccion) {
   const appLogger = global.logger;
 
   try {
@@ -195,20 +194,18 @@ async function procesarMensajeSupervisor(vendedorId, msg) {
     if (!texto) return;
 
     const prospectoNumero = remitente.replace('@s.whatsapp.net', '');
-    appLogger.info(`📨 Supervisor ${vendedorId} | De: ${prospectoNumero} | "${texto.substring(0, 50)}..."`);
+    appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${prospectoNumero} | "${texto.substring(0, 50)}..."`);
 
-    // Analizar con Claude
-    let analisis = null;
-    try {
-      analisis = await analizarMensaje(texto);
-    } catch (claudeErr) {
-      appLogger.warn({ claudeErr }, 'Error al analizar con Claude, guardando sin análisis');
-    }
+    // Guardar mensaje (tanto entrantes como salientes)
+    await guardarMensaje(
+      vendedorId,
+      prospectoNumero,
+      texto,
+      direccion === 'entrante', // true si es entrante, false si es saliente
+      null // análisis de Claude (lo implementaremos después)
+    );
 
-    // Guardar vía proxy
-    await guardarMensaje(vendedorId, prospectoNumero, texto, true, analisis);
-
-    appLogger.info(`💾 Mensaje guardado | Vendedor: ${vendedorId} | Análisis: ${analisis ? 'OK' : 'sin análisis'}`);
+    appLogger.info(`💾 Mensaje guardado | Vendedor: ${vendedorId} | Dirección: ${direccion}`);
 
   } catch (err) {
     appLogger.error({ err }, `Error procesando mensaje supervisor ${vendedorId}`);
