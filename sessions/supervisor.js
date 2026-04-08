@@ -8,13 +8,59 @@ const {
   makeInMemoryStore
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const { guardarMensaje } = require('../services/supabase');
 const { analizarMensaje } = require('../services/claude');
 
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions_data');
 const MAX_REINTENTOS = 10;
-const SUPABASE_PROXY_URL = 'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy';
+const EDGE_FUNCTION_BASE = 'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy';
 const logger = pino({ level: 'silent' }); // Logger silencioso para Baileys
+
+async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante, lidId) {
+  try {
+    // Paso 1: Buscar o crear cliente
+    const responseCliente = await fetch(`${EDGE_FUNCTION_BASE}/buscar-o-crear-cliente`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        telefono: numeroProspecto,
+        email: null,
+        nombre: null,
+        vendedor_id: vendedorId
+      })
+    });
+
+    const { cliente } = await responseCliente.json();
+
+    if (!cliente) {
+      console.error('❌ No se pudo crear/encontrar cliente');
+      return;
+    }
+
+    // Paso 2: Guardar interacción
+    const responseInteraccion = await fetch(`${EDGE_FUNCTION_BASE}/guardar-interaccion`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cliente_id: cliente.id,
+        vendedor_id: vendedorId,
+        tipo: 'mensaje',
+        canal: 'whatsapp',
+        direccion: esEntrante ? 'entrante' : 'saliente',
+        contenido: texto,
+        timestamp: new Date().toISOString(),
+        metadata: { lid_id: lidId }
+      })
+    });
+
+    const result = await responseInteraccion.json();
+
+    if (result.success) {
+      console.log(`✅ Interacción guardada | Cliente: ${cliente.telefono || cliente.id}`);
+    }
+  } catch (error) {
+    console.error('❌ Error guardando interacción:', error);
+  }
+}
 
 // Mapa de sesiones activas: vendedorId -> { socket, estado, qr, reintentos, conversacionesMap }
 const sesiones = new Map();
@@ -212,7 +258,7 @@ async function conectarSupervisor(vendedorId, sessionPath) {
               // Fallback: consultar Supabase
               console.log(`🔍 ${vendedorId} | Buscando en BD para: ${remoteJid}`);
               try {
-                const response = await fetch(`${SUPABASE_PROXY_URL}/buscar-prospecto-por-lid`, {
+                const response = await fetch(`${EDGE_FUNCTION_BASE}/buscar-prospecto-por-lid`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ vendedor_id: vendedorId, lid_id: remoteJid })
@@ -250,17 +296,13 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         console.log(`📱 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio}`);
         appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio} | "${texto.substring(0, 50)}..."`);
 
+        const lidId = remoteJid.includes('@lid') ? remoteJid : null;
+
         try {
-          await guardarMensaje(
-            vendedorId,
-            numeroLimpio,
-            texto,
-            direccion === 'entrante',
-            null // análisis de Claude (implementar después)
-          );
+          await guardarInteraccion(vendedorId, numeroLimpio, texto, !esDelVendedor, lidId);
           appLogger.info(`💾 Guardado | Vendedor: ${vendedorId} | Dirección: ${direccion}`);
         } catch (err) {
-          appLogger.error({ err }, `Error guardando mensaje supervisor ${vendedorId}`);
+          appLogger.error({ err }, `Error guardando interacción supervisor ${vendedorId}`);
         }
       }
     });
