@@ -24,7 +24,7 @@ async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante
         vendedor_id: vendedorId,
         prospecto_numero: numeroProspecto,
         direccion: esEntrante ? 'entrante' : 'saliente',
-        contenido: texto,
+        texto: texto,
         timestamp: new Date().toISOString(),
         canal: 'whatsapp'
       })
