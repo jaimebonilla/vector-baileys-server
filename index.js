@@ -48,6 +48,9 @@ app.get('/api/health', (req, res) => {
 app.use('/api', qrRoutes);
 app.use('/api', apiRoutes);
 
+// Iniciar sincronización de Monday
+require('./jobs/sincronizar-monday');
+
 // Arrancar HTTP primero, SIEMPRE
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
