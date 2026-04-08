@@ -17,7 +17,7 @@ const logger = pino({ level: 'silent' }); // Logger silencioso para Baileys
 
 async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante) {
   try {
-    const response = await fetch(`${EDGE_FUNCTION_BASE}/guardar-interaccion-cruda`, {
+    const response = await fetch(`${EDGE_FUNCTION_BASE}/guardar-mensaje`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
