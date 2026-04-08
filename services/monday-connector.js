@@ -207,9 +207,6 @@ class MondayConnector {
       console.log(`   🆕 Creados: ${totalCreados}`);
       console.log(`   🔄 Actualizados: ${totalActualizados}`);
 
-      // Actualizar última sincronización
-      await this.actualizarUltimaSincronizacion();
-
     } catch (error) {
       console.error('❌ Error en sincronización Monday:', error);
     }
@@ -230,18 +227,6 @@ class MondayConnector {
     }
   }
 
-  async actualizarUltimaSincronizacion() {
-    try {
-      await fetch(`${EDGE_FUNCTION_BASE}/actualizar-sincronizacion`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tipo_crm: 'monday' })
-      });
-    } catch (error) {
-      // No crítico, solo log
-      console.log('⚠️ No se pudo actualizar timestamp de sincronización');
-    }
-  }
 }
 
 module.exports = MondayConnector;
