@@ -15,47 +15,27 @@ const MAX_REINTENTOS = 10;
 const EDGE_FUNCTION_BASE = 'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy';
 const logger = pino({ level: 'silent' }); // Logger silencioso para Baileys
 
-async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante, lidId) {
+async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante) {
   try {
-    // Paso 1: Buscar o crear cliente
-    const responseCliente = await fetch(`${EDGE_FUNCTION_BASE}/buscar-o-crear-cliente`, {
+    const response = await fetch(`${EDGE_FUNCTION_BASE}/guardar-interaccion-cruda`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        telefono: numeroProspecto,
-        email: null,
-        nombre: null,
-        vendedor_id: vendedorId
-      })
-    });
-
-    const { cliente } = await responseCliente.json();
-
-    if (!cliente) {
-      console.error('❌ No se pudo crear/encontrar cliente');
-      return;
-    }
-
-    // Paso 2: Guardar interacción
-    const responseInteraccion = await fetch(`${EDGE_FUNCTION_BASE}/guardar-interaccion`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cliente_id: cliente.id,
         vendedor_id: vendedorId,
-        tipo: 'mensaje',
-        canal: 'whatsapp',
+        prospecto_numero: numeroProspecto,
         direccion: esEntrante ? 'entrante' : 'saliente',
         contenido: texto,
         timestamp: new Date().toISOString(),
-        metadata: { lid_id: lidId }
+        canal: 'whatsapp'
       })
     });
 
-    const result = await responseInteraccion.json();
+    const result = await response.json();
 
     if (result.success) {
-      console.log(`✅ Interacción guardada | Cliente: ${cliente.telefono || cliente.id}`);
+      console.log(`✅ Interacción guardada | ${vendedorId} | ${numeroProspecto}`);
+    } else {
+      console.error('❌ Error al guardar interacción:', result);
     }
   } catch (error) {
     console.error('❌ Error guardando interacción:', error);
@@ -296,10 +276,8 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         console.log(`📱 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio}`);
         appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio} | "${texto.substring(0, 50)}..."`);
 
-        const lidId = remoteJid.includes('@lid') ? remoteJid : null;
-
         try {
-          await guardarInteraccion(vendedorId, numeroLimpio, texto, !esDelVendedor, lidId);
+          await guardarInteraccion(vendedorId, numeroLimpio, texto, !esDelVendedor);
           appLogger.info(`💾 Guardado | Vendedor: ${vendedorId} | Dirección: ${direccion}`);
         } catch (err) {
           appLogger.error({ err }, `Error guardando interacción supervisor ${vendedorId}`);
