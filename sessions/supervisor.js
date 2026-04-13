@@ -349,9 +349,34 @@ async function limpiarSesionSupervisor(vendedorId) {
   }
   sesiones.delete(vendedorId);
 
-  const sessionPath = path.join(SESSIONS_DIR, vendedorId);
+  const sessionPath = path.join(SESSIONS_DIR, `supervisor-${vendedorId}`);
   fs.rmSync(sessionPath, { recursive: true, force: true });
   appLogger.info(`🗑️ Carpeta de sesión eliminada: ${sessionPath}`);
+}
+
+async function limpiarTodasLasSesionesSupervisores() {
+  const appLogger = global.logger;
+  appLogger.info('🧹 Limpiando TODAS las sesiones de supervisores...');
+
+  // Cerrar todos los sockets activos
+  for (const [vendedorId, sesion] of sesiones.entries()) {
+    if (sesion?.socket) {
+      try { sesion.socket.end(new Error('limpieza total')); } catch (_) {}
+    }
+    appLogger.info(`  ↳ Sesión cerrada en memoria: ${vendedorId}`);
+  }
+  sesiones.clear();
+
+  // Eliminar todas las carpetas supervisor-* del disco
+  if (fs.existsSync(SESSIONS_DIR)) {
+    const carpetas = fs.readdirSync(SESSIONS_DIR).filter(d => d.startsWith('supervisor-'));
+    for (const carpeta of carpetas) {
+      const carpetaPath = path.join(SESSIONS_DIR, carpeta);
+      fs.rmSync(carpetaPath, { recursive: true, force: true });
+      appLogger.info(`  ↳ Carpeta eliminada: ${carpetaPath}`);
+    }
+    appLogger.info(`🗑️ ${carpetas.length} carpeta(s) de supervisor eliminadas`);
+  }
 }
 
 module.exports = {
@@ -359,6 +384,7 @@ module.exports = {
   reiniciarSesionSupervisor,
   cerrarSesionSupervisor,
   limpiarSesionSupervisor,
+  limpiarTodasLasSesionesSupervisores,
   getSesionesActivas,
   getEstadoSesion,
   getQRSesion

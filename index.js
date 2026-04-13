@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const pino = require('pino');
 
-const { iniciarSesionSupervisor, getSesionesActivas } = require('./sessions/supervisor');
+const { getSesionesActivas } = require('./sessions/supervisor');
 const { iniciarBotCentral } = require('./sessions/bot-central');
 const qrRoutes = require('./routes/qr');
 const apiRoutes = require('./routes/api');
@@ -59,7 +59,7 @@ app.listen(PORT, () => {
 });
 
 async function iniciarBaileys() {
-  logger.info('🔌 Iniciando conexiones de WhatsApp...');
+  logger.info('🔌 Iniciando Bot Central...');
 
   // Bot Central
   try {
@@ -68,16 +68,7 @@ async function iniciarBaileys() {
     logger.error({ err }, '❌ Error al iniciar Bot Central - el servidor sigue activo');
   }
 
-  // Sesiones de supervisores predeterminadas — en paralelo para que un fallo no bloquee al resto
-  const vendedores = ['vendedor1', 'vendedor2'];
-  const resultados = await Promise.allSettled(
-    vendedores.map(vendedorId => iniciarSesionSupervisor(vendedorId))
-  );
-  resultados.forEach((r, i) => {
-    if (r.status === 'rejected') {
-      logger.error({ err: r.reason }, `❌ Error al iniciar sesión de ${vendedores[i]} - el servidor sigue activo`);
-    }
-  });
+  // Las sesiones de supervisores se crean on-demand vía POST /api/sesion/:vendedorId
 
   // Cron de alertas
   try {
@@ -87,7 +78,7 @@ async function iniciarBaileys() {
     logger.error({ err }, '❌ Error al iniciar cron de alertas');
   }
 
-  logger.info(`💡 Sesiones iniciadas: bot-central + ${vendedores.join(', ')}`);
+  logger.info('💡 Servidor listo — sesiones de supervisores se crean on-demand');
 }
 
 module.exports = app;

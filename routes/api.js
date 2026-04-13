@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { enviarMensajeBotCentral, getEstadoBotCentral, reiniciarBotCentral, limpiarSesionBotCentral } = require('../sessions/bot-central');
-const { getSesionesActivas, reiniciarSesionSupervisor, limpiarSesionSupervisor } = require('../sessions/supervisor');
+const { getSesionesActivas, reiniciarSesionSupervisor, limpiarSesionSupervisor, limpiarTodasLasSesionesSupervisores } = require('../sessions/supervisor');
 const { obtenerAlertas, marcarAlertaEnviada } = require('../services/supabase');
 
 /**
@@ -87,8 +87,25 @@ router.post('/alertas/:id/enviada', async (req, res) => {
 });
 
 /**
+ * DELETE /api/sesiones/limpiar-todo
+ * Elimina TODAS las sesiones de supervisores de memoria y disco.
+ * Usar para resetear el servidor y crear sesiones desde cero con nuevos vendedor_id.
+ */
+router.delete('/sesiones/limpiar-todo', async (req, res) => {
+  const logger = global.logger;
+  try {
+    await limpiarTodasLasSesionesSupervisores();
+    logger.info('🧹 Todas las sesiones de supervisores eliminadas via API');
+    res.json({ success: true, message: 'Todas las sesiones de supervisores han sido eliminadas. Crea nuevas sesiones con POST /api/sesion/:vendedorId' });
+  } catch (err) {
+    logger.error({ err }, 'Error al limpiar todas las sesiones');
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/sesion/:sessionId/reiniciar
- * Reinicia una sesión detenida (bot-central, vendedor1, vendedor2, etc.)
+ * Reinicia una sesión detenida (bot-central o cualquier vendedor_id)
  */
 router.post('/sesion/:sessionId/reiniciar', async (req, res) => {
   const logger = global.logger;
