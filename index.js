@@ -59,13 +59,23 @@ app.listen(PORT, () => {
 });
 
 async function iniciarBaileys() {
-  logger.info('🔌 Iniciando Bot Central...');
+  // Bot Central por empresa (multi-tenant)
+  const slugs = (process.env.EMPRESAS_SLUGS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
 
-  // Bot Central
-  try {
-    await iniciarBotCentral();
-  } catch (err) {
-    logger.error({ err }, '❌ Error al iniciar Bot Central - el servidor sigue activo');
+  if (slugs.length === 0) {
+    logger.warn('⚠️  EMPRESAS_SLUGS no configurada — no se iniciará ningún Bot Central');
+  } else {
+    logger.info(`🔌 Iniciando Bot Central para ${slugs.length} empresa(s): ${slugs.join(', ')}`);
+    for (const slug of slugs) {
+      try {
+        await iniciarBotCentral(slug);
+      } catch (err) {
+        logger.error({ err }, `❌ Error al iniciar Bot Central "${slug}" - el servidor sigue activo`);
+      }
+    }
   }
 
   // Las sesiones de supervisores se crean on-demand vía POST /api/sesion/:vendedorId

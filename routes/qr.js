@@ -5,8 +5,9 @@ const { getEstadoSesion, getQRSesion, iniciarSesionSupervisor, reiniciarSesionSu
 const { getEstadoBotCentral, getQRBotCentral, reiniciarBotCentral } = require('../sessions/bot-central');
 
 function obtenerEstadoYQR(sessionId) {
-  if (sessionId === 'bot-central') {
-    return { estado: getEstadoBotCentral(), qrString: getQRBotCentral() };
+  if (sessionId.startsWith('bot-central-')) {
+    const slug = sessionId.slice('bot-central-'.length);
+    return { estado: getEstadoBotCentral(slug), qrString: getQRBotCentral(slug) };
   }
   return { estado: getEstadoSesion(sessionId), qrString: getQRSesion(sessionId) };
 }
@@ -37,8 +38,9 @@ router.get('/qr/:sessionId', async (req, res) => {
     // Si está detenida, reiniciar automáticamente y esperar QR
     if (estado === 'stopped') {
       console.log(`Sesión ${sessionId} detenida, reiniciando automáticamente...`);
-      if (sessionId === 'bot-central') {
-        await reiniciarBotCentral();
+      if (sessionId.startsWith('bot-central-')) {
+        const slug = sessionId.slice('bot-central-'.length);
+        await reiniciarBotCentral(slug);
       } else {
         await reiniciarSesionSupervisor(sessionId);
       }

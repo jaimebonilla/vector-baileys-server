@@ -7,70 +7,111 @@ const {
   fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const { obtenerContextoVendedor, guardarMensaje } = require('../services/supabase');
-const { generarRespuesta } = require('../services/claude');
 
-const SESSION_PATH = path.join(process.cwd(), 'sessions_data', 'bot-central');
+const SESSIONS_DIR = path.join(process.cwd(), 'sessions_data');
 const MAX_REINTENTOS = 10;
 const logger = pino({ level: 'silent' });
 
 function normalizarNumero(numero) {
-  // Elimina todo excepto dígitos
   return numero.replace(/\D/g, '');
 }
 
-// Estado del bot central
-let botSocket = null;
-let botEstado = null;
-let botQR = null;
-let reintentos = 0;
+// Map de bots centrales: slug -> { socket, estado, qr, reintentos }
+const botCentrales = new Map();
 
-// Números de gerentes autorizados
 function getGerentesAutorizados() {
   const nums = process.env.GERENTES_NUMEROS || '';
   return nums.split(',').map(n => n.trim()).filter(Boolean);
 }
 
-function getEstadoBotCentral() {
-  return botEstado;
+/**
+ * Retorna el estado de un bot-central por slug.
+ * Sin slug: compatibilidad con alertas.js — retorna 'connected' si alguno está conectado.
+ */
+function getEstadoBotCentral(slug) {
+  if (!slug) {
+    for (const bot of botCentrales.values()) {
+      if (bot.estado === 'connected') return 'connected';
+    }
+    const first = botCentrales.values().next().value;
+    return first ? first.estado : null;
+  }
+  return botCentrales.get(slug)?.estado || null;
 }
 
-function getQRBotCentral() {
-  return botQR;
+function getQRBotCentral(slug) {
+  return botCentrales.get(slug)?.qr || null;
 }
 
-async function iniciarBotCentral() {
-  fs.mkdirSync(SESSION_PATH, { recursive: true });
-  botEstado = 'iniciando';
-  global.logger.info('🤖 Iniciando Bot Central...');
-  await conectarBotCentral();
+/**
+ * Lista todos los bot-centrales activos para el endpoint GET /api/sesiones.
+ */
+function getAllBotCentrales() {
+  const result = [];
+  for (const [slug, bot] of botCentrales.entries()) {
+    result.push({
+      slug,
+      sessionId: `bot-central-${slug}`,
+      estado: bot.estado,
+      qrUrl: `/api/qr/bot-central-${slug}`
+    });
+  }
+  return result;
 }
 
-async function conectarBotCentral() {
+/**
+ * Inicia (o reinicia) el bot-central para un slug dado.
+ * @param {string} slug - Identificador de la empresa (ej: "alianza_capitales")
+ */
+async function iniciarBotCentral(slug) {
   const appLogger = global.logger;
+  const sessionPath = path.join(SESSIONS_DIR, `bot-central-${slug}`);
+  fs.mkdirSync(sessionPath, { recursive: true });
 
-  if (reintentos >= MAX_REINTENTOS) {
-    appLogger.error(`⛔ Bot Central: máximo de reintentos (${MAX_REINTENTOS}) alcanzado. Detenido.`);
-    botEstado = 'stopped';
+  const existente = botCentrales.get(slug);
+  if (existente?.estado === 'connected') {
+    appLogger.info(`Bot Central ${slug} ya está conectado`);
+    return;
+  }
+
+  botCentrales.set(slug, {
+    estado: 'iniciando',
+    socket: null,
+    qr: null,
+    reintentos: existente?.reintentos || 0
+  });
+
+  appLogger.info(`🤖 Iniciando Bot Central: ${slug}`);
+  await conectarBotCentral(slug, sessionPath);
+}
+
+async function conectarBotCentral(slug, sessionPath) {
+  const appLogger = global.logger;
+  const bot = botCentrales.get(slug);
+  if (!bot) return;
+
+  if (bot.reintentos >= MAX_REINTENTOS) {
+    appLogger.error(`⛔ Bot Central ${slug}: máximo de reintentos (${MAX_REINTENTOS}) alcanzado. Detenido.`);
+    bot.estado = 'stopped';
     return;
   }
 
   try {
     const { version } = await fetchLatestBaileysVersion();
-    const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
     const sock = makeWASocket({
       version,
       auth: state,
       logger,
       printQRInTerminal: false,
-      browser: ['Vector Bot', 'Chrome', '1.0.0'],
+      browser: [`Vector Bot ${slug}`, 'Chrome', '1.0.0'],
       getMessage: async () => undefined
     });
 
-    botSocket = sock;
-    botEstado = 'conectando';
-    botQR = null;
+    bot.socket = sock;
+    bot.estado = 'conectando';
+    bot.qr = null;
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -78,72 +119,72 @@ async function conectarBotCentral() {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        botQR = qr;
-        botEstado = 'waiting_qr';
-        appLogger.info('📱 QR del Bot Central listo - consulta /api/qr/bot-central');
+        bot.qr = qr;
+        bot.estado = 'waiting_qr';
+        appLogger.info(`📱 QR Bot Central ${slug} listo → /api/qr/bot-central-${slug}`);
       }
 
       if (connection === 'open') {
-        botEstado = 'connected';
-        botQR = null;
-        reintentos = 0;
-        appLogger.info('✅ Bot Central conectado y listo');
+        bot.estado = 'connected';
+        bot.qr = null;
+        bot.reintentos = 0;
+        appLogger.info(`✅ Bot Central ${slug} conectado y listo`);
       }
 
       if (connection === 'close') {
         const codigo = lastDisconnect?.error?.output?.statusCode;
         const esLogout = codigo === DisconnectReason.loggedOut;
 
-        botEstado = 'desconectado';
-        botQR = null;
-        botSocket = null;
+        bot.estado = 'desconectado';
+        bot.qr = null;
+        bot.socket = null;
 
         if (esLogout) {
-          appLogger.warn('👋 Bot Central cerró sesión (logout). Eliminando credenciales.');
-          fs.rmSync(SESSION_PATH, { recursive: true, force: true });
-          fs.mkdirSync(SESSION_PATH, { recursive: true });
-          reintentos = 0;
-          botEstado = 'iniciando';
-          setTimeout(conectarBotCentral, 3000);
+          appLogger.warn(`👋 Bot Central ${slug} hizo logout. Eliminando credenciales.`);
+          fs.rmSync(sessionPath, { recursive: true, force: true });
+          fs.mkdirSync(sessionPath, { recursive: true });
+          bot.reintentos = 0;
+          bot.estado = 'iniciando';
+          setTimeout(() => conectarBotCentral(slug, sessionPath), 3000);
           return;
         }
 
-        reintentos++;
+        bot.reintentos++;
         const delay = 30000;
-        appLogger.warn(`🔄 Bot Central desconectado (código ${codigo}). Reintento ${reintentos}/${MAX_REINTENTOS} en ${delay / 1000}s`);
+        appLogger.warn(`🔄 Bot Central ${slug} desconectado (código ${codigo}). Reintento ${bot.reintentos}/${MAX_REINTENTOS} en ${delay / 1000}s`);
 
-        if (reintentos < MAX_REINTENTOS) {
-          setTimeout(conectarBotCentral, delay);
+        if (bot.reintentos < MAX_REINTENTOS) {
+          setTimeout(() => conectarBotCentral(slug, sessionPath), delay);
         } else {
-          appLogger.error('⛔ Bot Central: máximo reintentos alcanzado. El servidor HTTP sigue activo.');
-          botEstado = 'stopped';
+          appLogger.error(`⛔ Bot Central ${slug}: máximo reintentos. Detenido.`);
+          bot.estado = 'stopped';
         }
       }
     });
 
-    // Procesar mensajes entrantes (solo de gerentes autorizados)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
       for (const m of messages) {
-        await procesarMensajeBotCentral(m);
+        await procesarMensajeBotCentral(slug, m, sock);
       }
     });
 
   } catch (err) {
-    appLogger.error({ err }, 'Error al conectar Bot Central');
-    botEstado = 'error';
-    reintentos++;
-
-    if (reintentos < MAX_REINTENTOS) {
-      const delay = Math.min(5000 * reintentos, 30000);
-      setTimeout(conectarBotCentral, delay);
-    } else {
-      botEstado = 'stopped';
+    appLogger.error({ err }, `Error al conectar Bot Central ${slug}`);
+    if (bot) {
+      bot.estado = 'error';
+      bot.reintentos++;
+      const delay = Math.min(5000 * bot.reintentos, 30000);
+      if (bot.reintentos < MAX_REINTENTOS) {
+        setTimeout(() => conectarBotCentral(slug, sessionPath), delay);
+      } else {
+        bot.estado = 'stopped';
+      }
     }
   }
 }
 
-async function procesarMensajeBotCentral(msg) {
+async function procesarMensajeBotCentral(slug, msg, sock) {
   const appLogger = global.logger;
 
   try {
@@ -153,71 +194,61 @@ async function procesarMensajeBotCentral(msg) {
 
     const remitenteRaw = msg.key.senderPn || msg.key.participant || msg.key.remoteJid;
     const remitente = remitenteRaw.replace('@s.whatsapp.net', '').replace('@c.us', '');
-    const gerentesAutorizados = getGerentesAutorizados();
 
-    // Solo procesar mensajes de gerentes autorizados (con normalización de número)
+    const gerentesAutorizados = getGerentesAutorizados();
     const remitenteNorm = normalizarNumero(remitente);
     const esGerente = gerentesAutorizados.some(n => {
       const nNorm = normalizarNumero(n);
       return remitenteNorm === nNorm || remitenteNorm.includes(nNorm) || remitenteNorm.endsWith(nNorm);
     });
+
     if (!esGerente) {
-      appLogger.debug(`Bot Central: mensaje ignorado de número no autorizado ${remitente}`);
+      appLogger.debug(`Bot Central ${slug}: mensaje ignorado de número no autorizado ${remitente}`);
       return;
     }
 
     const texto = extraerTexto(msg.message);
     if (!texto) return;
 
-    appLogger.info(`👔 Gerente ${remitente}: "${texto.substring(0, 50)}..."`);
+    appLogger.info(`👔 Gerente ${remitente} → ${slug}: "${texto.substring(0, 50)}..."`);
 
-    // El gerente puede enviar: "vendedor:XXXXX pregunta..."
-    // o simplemente una pregunta general
-    let vendedorId = null;
-    let pregunta = texto;
-
-    const match = texto.match(/^vendedor[:\s]+(\S+)\s+(.*)/is);
-    if (match) {
-      vendedorId = match[1];
-      pregunta = match[2];
+    const edgeUrl = process.env.LOVABLE_EDGE_URL;
+    if (!edgeUrl) {
+      appLogger.error('LOVABLE_EDGE_URL no configurada');
+      await sock.sendMessage(msg.key.remoteJid, {
+        text: 'Error de configuración del servidor. Contacta al administrador.'
+      }, { ephemeralExpiration: 0 });
+      return;
     }
 
-    // Obtener contexto del vendedor desde Supabase
-    let contexto = 'No hay contexto disponible aún.';
-    if (vendedorId) {
-      try {
-        contexto = await obtenerContextoVendedor(vendedorId);
-      } catch (err) {
-        appLogger.warn({ err }, `No se pudo obtener contexto del vendedor ${vendedorId}`);
-      }
+    const response = await fetch(`${edgeUrl}/agente-central-responder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ numero_gerente: remitente, mensaje: texto, slug })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Edge function respondió con ${response.status}: ${await response.text()}`);
     }
 
-    // Generar respuesta con Claude
-    const respuesta = await generarRespuesta({ pregunta, contexto, vendedorId });
+    const data = await response.json();
+    const respuesta = data.respuesta || data.text || data.message;
 
-    // Enviar respuesta al gerente
-    await botSocket.sendMessage(msg.key.remoteJid, { text: respuesta }, { ephemeralExpiration: 0 });
-
-    // Guardar vía proxy si hay vendedor identificado
-    if (vendedorId) {
-      await guardarMensaje(vendedorId, remitente, texto, true, null);
-      await guardarMensaje(vendedorId, remitente, respuesta, false, null);
+    if (!respuesta) {
+      throw new Error('Edge function no devolvió campo respuesta/text/message');
     }
 
-    appLogger.info(`✉️ Respuesta enviada al gerente ${remitente}`);
+    await sock.sendMessage(msg.key.remoteJid, { text: respuesta }, { ephemeralExpiration: 0 });
+    appLogger.info(`✉️ Respuesta enviada al gerente ${remitente} (${slug})`);
 
   } catch (err) {
-    appLogger.error({ err }, 'Error procesando mensaje Bot Central');
+    appLogger.error({ err }, `Error procesando mensaje Bot Central ${slug}`);
+    try {
+      await sock.sendMessage(msg.key.remoteJid, {
+        text: 'Disculpa, hubo un error procesando tu solicitud.'
+      }, { ephemeralExpiration: 0 });
+    } catch (_) {}
   }
-}
-
-async function enviarMensajeBotCentral(numero, mensaje) {
-  if (!botSocket || botEstado !== 'connected') {
-    throw new Error('Bot Central no está conectado');
-  }
-
-  const jid = numero.includes('@') ? numero : `${numero}@s.whatsapp.net`;
-  await botSocket.sendMessage(jid, { text: mensaje }, { ephemeralExpiration: 0 });
 }
 
 function extraerTexto(message) {
@@ -231,35 +262,57 @@ function extraerTexto(message) {
   );
 }
 
-async function reiniciarBotCentral() {
-  const appLogger = global.logger;
-  appLogger.info('♻️ Reiniciando Bot Central...');
+/**
+ * Envía un mensaje desde el bot-central de un slug.
+ * Firma: (numero, mensaje, slug?) — mantiene compatibilidad con alertas.js
+ * que llama enviarMensajeBotCentral(gerente, alerta.mensaje) sin slug.
+ */
+async function enviarMensajeBotCentral(numero, mensaje, slug) {
+  let bot;
 
-  if (botSocket) {
-    try { botSocket.end(new Error('reinicio manual')); } catch (_) {}
-    botSocket = null;
+  if (slug) {
+    bot = botCentrales.get(slug);
+  } else {
+    // Compatibilidad: usar el primer bot conectado disponible
+    for (const b of botCentrales.values()) {
+      if (b.estado === 'connected') { bot = b; break; }
+    }
   }
-  reintentos = 0;
-  botEstado = null;
-  botQR = null;
 
-  await iniciarBotCentral();
+  if (!bot || bot.estado !== 'connected') {
+    throw new Error(`Bot Central${slug ? ` ${slug}` : ''} no está conectado`);
+  }
+
+  const jid = numero.includes('@') ? numero : `${numero}@s.whatsapp.net`;
+  await bot.socket.sendMessage(jid, { text: mensaje }, { ephemeralExpiration: 0 });
 }
 
-async function limpiarSesionBotCentral() {
+async function reiniciarBotCentral(slug) {
   const appLogger = global.logger;
-  appLogger.info('🧹 Limpiando sesión Bot Central...');
+  appLogger.info(`♻️ Reiniciando Bot Central: ${slug}`);
 
-  if (botSocket) {
-    try { botSocket.end(new Error('limpieza manual')); } catch (_) {}
-    botSocket = null;
+  const bot = botCentrales.get(slug);
+  if (bot?.socket) {
+    try { bot.socket.end(new Error('reinicio manual')); } catch (_) {}
   }
-  reintentos = 0;
-  botEstado = 'stopped';
-  botQR = null;
+  botCentrales.delete(slug);
 
-  fs.rmSync(SESSION_PATH, { recursive: true, force: true });
-  appLogger.info(`🗑️ Carpeta de sesión eliminada: ${SESSION_PATH}`);
+  await iniciarBotCentral(slug);
+}
+
+async function limpiarSesionBotCentral(slug) {
+  const appLogger = global.logger;
+  appLogger.info(`🧹 Limpiando sesión Bot Central: ${slug}`);
+
+  const bot = botCentrales.get(slug);
+  if (bot?.socket) {
+    try { bot.socket.end(new Error('limpieza manual')); } catch (_) {}
+  }
+  botCentrales.delete(slug);
+
+  const sessionPath = path.join(SESSIONS_DIR, `bot-central-${slug}`);
+  fs.rmSync(sessionPath, { recursive: true, force: true });
+  appLogger.info(`🗑️ Carpeta de sesión eliminada: ${sessionPath}`);
 }
 
 module.exports = {
@@ -268,5 +321,6 @@ module.exports = {
   limpiarSesionBotCentral,
   enviarMensajeBotCentral,
   getEstadoBotCentral,
-  getQRBotCentral
+  getQRBotCentral,
+  getAllBotCentrales
 };

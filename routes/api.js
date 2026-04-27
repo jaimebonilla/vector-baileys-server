@@ -1,33 +1,33 @@
 const express = require('express');
 const router = express.Router();
-const { enviarMensajeBotCentral, getEstadoBotCentral, reiniciarBotCentral, limpiarSesionBotCentral } = require('../sessions/bot-central');
+const { enviarMensajeBotCentral, getEstadoBotCentral, reiniciarBotCentral, limpiarSesionBotCentral, iniciarBotCentral, getAllBotCentrales } = require('../sessions/bot-central');
 const { getSesionesActivas, reiniciarSesionSupervisor, limpiarSesionSupervisor, limpiarTodasLasSesionesSupervisores } = require('../sessions/supervisor');
 const { obtenerAlertas, marcarAlertaEnviada } = require('../services/supabase');
 
 /**
  * POST /api/enviar
- * Envía un mensaje desde el Bot Central.
- * Body: { numero: "5219991234567", mensaje: "Hola..." }
+ * Envía un mensaje desde el Bot Central de una empresa.
+ * Body: { numero: "5219991234567", mensaje: "Hola...", slug: "alianza_capitales" }
  */
 router.post('/enviar', async (req, res) => {
   const logger = global.logger;
-  const { numero, mensaje } = req.body;
+  const { numero, mensaje, slug } = req.body;
 
   if (!numero || !mensaje) {
     return res.status(400).json({ error: 'Faltan campos: numero, mensaje' });
   }
 
-  if (getEstadoBotCentral() !== 'connected') {
+  if (getEstadoBotCentral(slug) !== 'connected') {
     return res.status(503).json({
-      error: 'Bot Central no está conectado',
-      estado: getEstadoBotCentral()
+      error: `Bot Central${slug ? ` "${slug}"` : ''} no está conectado`,
+      estado: getEstadoBotCentral(slug)
     });
   }
 
   try {
-    await enviarMensajeBotCentral(numero, mensaje);
-    logger.info(`Mensaje enviado a ${numero} via Bot Central`);
-    res.json({ ok: true, numero, timestamp: new Date().toISOString() });
+    await enviarMensajeBotCentral(numero, mensaje, slug);
+    logger.info(`Mensaje enviado a ${numero} via Bot Central${slug ? ` (${slug})` : ''}`);
+    res.json({ ok: true, numero, slug: slug || null, timestamp: new Date().toISOString() });
   } catch (err) {
     logger.error({ err }, `Error enviando mensaje a ${numero}`);
     res.status(500).json({ error: 'Error al enviar mensaje', detalle: err.message });
@@ -36,18 +36,14 @@ router.post('/enviar', async (req, res) => {
 
 /**
  * GET /api/sesiones
- * Lista el estado de todas las sesiones activas.
+ * Lista el estado de todas las sesiones activas (bot-centrales + supervisores).
  */
 router.get('/sesiones', (req, res) => {
-  const { getEstadoBotCentral } = require('../sessions/bot-central');
   const sesiones = getSesionesActivas();
-  const botEstado = getEstadoBotCentral();
+  const botCentralesList = getAllBotCentrales();
 
   res.json({
-    botCentral: {
-      estado: botEstado || 'no_iniciado',
-      qrUrl: '/api/qr/bot-central'
-    },
+    botCentrales: botCentralesList.length > 0 ? botCentralesList : [],
     supervisores: sesiones.supervisores.map(s => ({
       ...s,
       qrUrl: `/api/qr/${s.vendedorId}`
@@ -105,15 +101,17 @@ router.delete('/sesiones/limpiar-todo', async (req, res) => {
 
 /**
  * POST /api/sesion/:sessionId/reiniciar
- * Reinicia una sesión detenida (bot-central o cualquier vendedor_id)
+ * Reinicia una sesión detenida.
+ * sessionId puede ser "bot-central-{slug}" o un vendedor_id.
  */
 router.post('/sesion/:sessionId/reiniciar', async (req, res) => {
   const logger = global.logger;
   const { sessionId } = req.params;
 
   try {
-    if (sessionId === 'bot-central') {
-      await reiniciarBotCentral();
+    if (sessionId.startsWith('bot-central-')) {
+      const slug = sessionId.slice('bot-central-'.length);
+      await reiniciarBotCentral(slug);
     } else {
       await reiniciarSesionSupervisor(sessionId);
     }
@@ -128,14 +126,16 @@ router.post('/sesion/:sessionId/reiniciar', async (req, res) => {
 /**
  * DELETE /api/sesion/:sessionId/limpiar
  * Detiene la sesión y elimina su carpeta de datos (limpieza total).
+ * sessionId puede ser "bot-central-{slug}" o un vendedor_id.
  */
 router.delete('/sesion/:sessionId/limpiar', async (req, res) => {
   const logger = global.logger;
   const { sessionId } = req.params;
 
   try {
-    if (sessionId === 'bot-central') {
-      await limpiarSesionBotCentral();
+    if (sessionId.startsWith('bot-central-')) {
+      const slug = sessionId.slice('bot-central-'.length);
+      await limpiarSesionBotCentral(slug);
     } else {
       await limpiarSesionSupervisor(sessionId);
     }
@@ -143,6 +143,48 @@ router.delete('/sesion/:sessionId/limpiar', async (req, res) => {
     res.json({ success: true, message: 'Sesión limpiada' });
   } catch (err) {
     logger.error({ err }, `Error al limpiar sesión ${sessionId}`);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/bot-central/:slug/iniciar
+ * Arranca un bot-central para una empresa específica.
+ */
+router.post('/bot-central/:slug/iniciar', async (req, res) => {
+  const logger = global.logger;
+  const { slug } = req.params;
+
+  try {
+    iniciarBotCentral(slug).catch(err => {
+      logger.error({ err }, `Error iniciando Bot Central ${slug}`);
+    });
+    logger.info(`🤖 Bot Central "${slug}" iniciado via API`);
+    res.json({
+      success: true,
+      message: `Bot Central "${slug}" iniciado. Consulta /api/qr/bot-central-${slug} para el QR.`,
+      sessionId: `bot-central-${slug}`
+    });
+  } catch (err) {
+    logger.error({ err }, `Error en POST /api/bot-central/${slug}/iniciar`);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/bot-central/:slug/detener
+ * Detiene y limpia el bot-central de una empresa.
+ */
+router.delete('/bot-central/:slug/detener', async (req, res) => {
+  const logger = global.logger;
+  const { slug } = req.params;
+
+  try {
+    await limpiarSesionBotCentral(slug);
+    logger.info(`🛑 Bot Central "${slug}" detenido via API`);
+    res.json({ success: true, message: `Bot Central "${slug}" detenido y sesión eliminada.` });
+  } catch (err) {
+    logger.error({ err }, `Error en DELETE /api/bot-central/${slug}/detener`);
     res.status(500).json({ success: false, error: err.message });
   }
 });
