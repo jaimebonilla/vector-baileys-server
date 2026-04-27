@@ -58,18 +58,45 @@ app.listen(PORT, () => {
   iniciarBaileys();
 });
 
-async function iniciarBaileys() {
-  // Bot Central por empresa (multi-tenant)
-  const slugs = (process.env.EMPRESAS_SLUGS || '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
+async function obtenerEmpresasActivas() {
+  const edgeUrl = process.env.LOVABLE_EDGE_URL;
+  if (!edgeUrl) {
+    logger.warn('⚠️  LOVABLE_EDGE_URL no configurada — no se cargará ninguna empresa');
+    return [];
+  }
 
-  if (slugs.length === 0) {
-    logger.warn('⚠️  EMPRESAS_SLUGS no configurada — no se iniciará ningún Bot Central');
-  } else {
-    logger.info(`🔌 Iniciando Bot Central para ${slugs.length} empresa(s): ${slugs.join(', ')}`);
-    for (const slug of slugs) {
+  const MAX_INTENTOS = 3;
+  const DELAY_MS = 5000;
+
+  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    try {
+      logger.info(`🌐 Cargando empresas activas desde Lovable Cloud (intento ${intento}/${MAX_INTENTOS})...`);
+      const res = await fetch(`${edgeUrl}/empresas-activas`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      const empresas = await res.json();
+      if (!Array.isArray(empresas)) throw new Error('Respuesta inesperada: se esperaba un array');
+      logger.info(`✅ ${empresas.length} empresa(s) cargadas: ${empresas.map(e => e.slug).join(', ')}`);
+      return empresas;
+    } catch (err) {
+      logger.error({ err }, `❌ Error cargando empresas (intento ${intento}/${MAX_INTENTOS})`);
+      if (intento < MAX_INTENTOS) {
+        logger.info(`⏳ Reintentando en ${DELAY_MS / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, DELAY_MS));
+      }
+    }
+  }
+
+  logger.warn('⚠️  No se pudieron cargar empresas tras todos los intentos — no se iniciará ningún Bot Central');
+  return [];
+}
+
+async function iniciarBaileys() {
+  // Cargar empresas dinámicamente desde Lovable Cloud
+  const empresas = await obtenerEmpresasActivas();
+
+  if (empresas.length > 0) {
+    logger.info(`🔌 Iniciando Bot Central para ${empresas.length} empresa(s)...`);
+    for (const { slug } of empresas) {
       try {
         await iniciarBotCentral(slug);
       } catch (err) {
