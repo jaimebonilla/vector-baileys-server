@@ -123,108 +123,9 @@ async function conectarBotCentral() {
 
     // Procesar mensajes entrantes (solo de gerentes autorizados)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      console.log('📱 Bot Central | Mensaje recibido (raw):', JSON.stringify(messages, null, 2));
-
       if (type !== 'notify') return;
-
       for (const m of messages) {
-        if (!m.message) continue;
-
-        // Extraer el número real del remitente
-        // participant existe cuando el mensaje viene de un chat individual
-        // remoteJid es el respaldo
-        // El número real está en senderPn (formato: 50672120211@s.whatsapp.net)
-        const numeroRemite = m.key.senderPn || m.key.participant || m.key.remoteJid;
-        console.log('📱 Mensaje | key completo:', JSON.stringify(m.key, null, 2));
-        console.log('📱 Mensaje | remoteJid:', m.key.remoteJid);
-        console.log('📱 Mensaje | participant:', m.key.participant);
-        console.log('📱 Mensaje | senderPn:', m.key.senderPn);
-        console.log('📱 Mensaje | fromMe:', m.key.fromMe);
-        console.log('📱 Mensaje | Número extraído:', numeroRemite);
-
-        // Ignorar mensajes propios
-        if (m.key.fromMe) {
-          console.log('⏭️ Mensaje propio, ignorando');
-          continue;
-        }
-
-        // Ignorar grupos
-        if (m.key.remoteJid.endsWith('@g.us')) continue;
-
-        const numeroNormalizado = normalizarNumero(numeroRemite);
-        console.log('📱 Bot Central | Número normalizado:', numeroNormalizado);
-
-        const GERENTES_NUMEROS = getGerentesAutorizados();
-        console.log('📱 Bot Central | Números autorizados:', GERENTES_NUMEROS);
-
-        const esAutorizado = GERENTES_NUMEROS.some(n => {
-          const nNormalizado = normalizarNumero(n);
-          console.log('📱 Bot Central | Comparando:', numeroNormalizado, 'con', nNormalizado);
-          return numeroNormalizado === nNormalizado ||
-                 numeroNormalizado.includes(nNormalizado) ||
-                 numeroNormalizado.endsWith(nNormalizado);
-        });
-
-        console.log('📱 Bot Central | ¿Es autorizado?:', esAutorizado);
-
-        if (!esAutorizado) {
-          console.log('❌ Bot Central | Mensaje de número no autorizado, ignorando');
-          continue;
-        }
-
-        console.log('✅ Bot Central | Mensaje del gerente, procesando...');
-
-        try {
-          // Extraer texto del mensaje
-          const textoMensaje = m.message?.conversation ||
-                               m.message?.extendedTextMessage?.text ||
-                               '';
-
-          if (!textoMensaje) continue;
-
-          // Consultar conversaciones en Supabase vía Edge Function
-          const response = await fetch('https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy/consultar-conversaciones', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-          });
-
-          const { conversaciones } = await response.json();
-
-          // Preparar contexto para Claude
-          const contexto = `Tienes acceso a las conversaciones de los vendedores:
-${JSON.stringify(conversaciones, null, 2)}
-Pregunta del gerente: ${textoMensaje}
-Responde de forma concisa y profesional con la información solicitada.`;
-
-          // Llamar a Claude API
-          const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': process.env.ANTHROPIC_API_KEY,
-              'anthropic-version': '2023-06-01'
-            },
-            body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
-              max_tokens: 1024,
-              messages: [{ role: 'user', content: contexto }]
-            })
-          });
-
-          const claudeData = await claudeResponse.json();
-          const respuesta = claudeData.content[0].text;
-
-          // Enviar respuesta por WhatsApp
-          await sock.sendMessage(numeroRemite, { text: respuesta }, { ephemeralExpiration: 0 });
-
-          console.log('✅ Bot Central | Respuesta enviada');
-        } catch (error) {
-          console.error('❌ Bot Central | ERROR:', error);
-          await sock.sendMessage(numeroRemite, {
-            text: 'Disculpa, hubo un error procesando tu solicitud.'
-          }, { ephemeralExpiration: 0 });
-        }
+        await procesarMensajeBotCentral(m);
       }
     });
 
@@ -246,7 +147,12 @@ async function procesarMensajeBotCentral(msg) {
   const appLogger = global.logger;
 
   try {
-    const remitente = msg.key.remoteJid.replace('@s.whatsapp.net', '');
+    if (!msg.message) return;
+    if (msg.key.fromMe) return;
+    if (msg.key.remoteJid.endsWith('@g.us')) return;
+
+    const remitenteRaw = msg.key.senderPn || msg.key.participant || msg.key.remoteJid;
+    const remitente = remitenteRaw.replace('@s.whatsapp.net', '').replace('@c.us', '');
     const gerentesAutorizados = getGerentesAutorizados();
 
     // Solo procesar mensajes de gerentes autorizados (con normalización de número)

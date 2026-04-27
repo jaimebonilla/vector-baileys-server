@@ -17,7 +17,7 @@ router.post('/enviar', async (req, res) => {
     return res.status(400).json({ error: 'Faltan campos: numero, mensaje' });
   }
 
-  if (getEstadoBotCentral() !== 'conectado') {
+  if (getEstadoBotCentral() !== 'connected') {
     return res.status(503).json({
       error: 'Bot Central no está conectado',
       estado: getEstadoBotCentral()

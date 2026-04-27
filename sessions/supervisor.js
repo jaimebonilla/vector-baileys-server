@@ -15,7 +15,7 @@ const MAX_REINTENTOS = 10;
 const EDGE_FUNCTION_BASE = 'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy';
 const logger = pino({ level: 'silent' }); // Logger silencioso para Baileys
 
-async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante) {
+async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante, analisis = null) {
   try {
     const response = await fetch(`${EDGE_FUNCTION_BASE}/guardar-mensaje`, {
       method: 'POST',
@@ -26,7 +26,8 @@ async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante
         direccion: esEntrante ? 'entrante' : 'saliente',
         texto: texto,
         timestamp: new Date().toISOString(),
-        canal: 'whatsapp'
+        canal: 'whatsapp',
+        analisis_claude: analisis
       })
     });
 
@@ -277,7 +278,15 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio} | "${texto.substring(0, 50)}..."`);
 
         try {
-          await guardarInteraccion(vendedorId, numeroLimpio, texto, !esDelVendedor);
+          let analisis = null;
+          if (!esDelVendedor) {
+            try {
+              analisis = await analizarMensaje(texto);
+            } catch (err) {
+              appLogger.warn({ err }, `Error analizando mensaje de ${numeroLimpio}`);
+            }
+          }
+          await guardarInteraccion(vendedorId, numeroLimpio, texto, !esDelVendedor, analisis);
           appLogger.info(`💾 Guardado | Vendedor: ${vendedorId} | Dirección: ${direccion}`);
         } catch (err) {
           appLogger.error({ err }, `Error guardando interacción supervisor ${vendedorId}`);
