@@ -136,50 +136,47 @@ async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
     const rows = await res.json();
 
     const telefonos = [...new Set(rows.map(r => r.telefono).filter(Boolean))];
+    console.log(`[lid-auto] ${vendedorId} | clientes encontrados en DB: ${telefonos.length} → [${telefonos.join(', ')}]`);
     if (telefonos.length === 0) {
-      console.log(`[lid-auto] ${vendedorId} | sin clientes activos en DB`);
+      console.log(`[lid-auto] ${vendedorId} | sin clientes con teléfono activos`);
       return;
     }
-    console.log(`[lid-auto] ${vendedorId} | ${telefonos.length} clientes activos — consultando WhatsApp...`);
 
     const BATCH = 50;
     let nuevos = 0;
     for (let i = 0; i < telefonos.length; i += BATCH) {
       const lote = telefonos.slice(i, i + BATCH);
       try {
+        console.log(`[lid-auto] ${vendedorId} | llamando onWhatsApp con: [${lote.join(', ')}]`);
         const results = await sock.onWhatsApp(...lote);
-        // IMPORTANTE: onWhatsApp filtra resultados (solo devuelve los que existen),
-        // por lo que results[j] NO corresponde necesariamente a lote[j].
-        // Derivar el teléfono DESDE r.jid, no desde el índice del array.
+        console.log(`[lid-auto] ${vendedorId} | resultado onWhatsApp:`, JSON.stringify(results));
+
         for (const r of (results || [])) {
           if (!r?.exists || !r.jid) continue;
 
-          // El jid devuelto es "50660020956@s.whatsapp.net" — extraer solo dígitos
           const phone = r.jid
             .replace(/@s\.whatsapp\.net$/, '')
             .replace(/@c\.us$/, '')
             .replace(/\D/g, '');
           if (!phone) continue;
 
-          // Mapear jid normal → phone
           if (!lidToPhone.has(r.jid)) {
             lidToPhone.set(r.jid, phone);
             nuevos++;
           }
-          // Mapear @lid → phone (Privacy Mode) — CAMPO CLAVE
           if (r.lid && r.lid !== r.jid && !lidToPhone.has(r.lid)) {
             lidToPhone.set(r.lid, phone);
             nuevos++;
-            console.log(`[lid-auto] ${vendedorId} | ${r.lid} → ${phone}`);
+            console.log(`[lid-auto] ✅ ${vendedorId} | ${r.lid} → ${phone}`);
           }
         }
       } catch (batchErr) {
-        console.log(`[lid-auto] Error en lote:`, batchErr.message);
+        console.log(`[lid-auto] ${vendedorId} | Error en lote:`, batchErr.message);
       }
     }
 
     if (nuevos > 0) saveLidMap(sessionPath, lidToPhone);
-    console.log(`[lid-auto] ${vendedorId} | mapeados=${nuevos} total=${lidToPhone.size}`);
+    console.log(`[lid-auto] ${vendedorId} | DONE mapeados=${nuevos} total=${lidToPhone.size} mapa:`, JSON.stringify(Object.fromEntries(lidToPhone)));
   } catch (err) {
     console.log(`[lid-auto] ${vendedorId} | Error:`, err.message);
   }
@@ -350,20 +347,12 @@ async function conectarSupervisor(vendedorId, sessionPath) {
             if (phone) addLidMapping(jid, phone);
           }
 
-          // 2. Mapa local (cargado de disco o ya resuelto antes)
+          // 2. Mapa local (cargado de disco, llenado por autoMapearLids o senderPn)
           prospecto_numero = lidToPhone.get(jid) || null;
 
-          // 3. Fallback: preguntar al proxy de Lovable
           if (!prospecto_numero) {
-            const resuelto = await resolverLidViaProxy(jid, vendedorId);
-            if (resuelto) {
-              addLidMapping(jid, resuelto);
-              prospecto_numero = resuelto;
-            }
-          }
-
-          if (!prospecto_numero) {
-            console.log(`[lid-map] ${vendedorId} | @lid sin mapeo: ${jid} — ignorando`);
+            console.log(`[lid-map] ${vendedorId} | @lid sin mapeo: ${jid}`);
+            console.log(`[lid-map] ${vendedorId} | mapa actual (${lidToPhone.size} entradas):`, JSON.stringify(Object.fromEntries(lidToPhone)));
           }
         }
 
