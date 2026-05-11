@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { enviarMensajeBotCentral, getEstadoBotCentral, reiniciarBotCentral, limpiarSesionBotCentral, iniciarBotCentral, getAllBotCentrales } = require('../sessions/bot-central');
-const { getSesionesActivas, reiniciarSesionSupervisor, limpiarSesionSupervisor, limpiarTodasLasSesionesSupervisores } = require('../sessions/supervisor');
+const { getSesionesActivas, reiniciarSesionSupervisor, limpiarSesionSupervisor, limpiarTodasLasSesionesSupervisores, registrarLid } = require('../sessions/supervisor');
 const { obtenerAlertas, marcarAlertaEnviada } = require('../services/supabase');
 
 /**
@@ -185,6 +185,28 @@ router.delete('/bot-central/:slug/detener', async (req, res) => {
     res.json({ success: true, message: `Bot Central "${slug}" detenido y sesión eliminada.` });
   } catch (err) {
     logger.error({ err }, `Error en DELETE /api/bot-central/${slug}/detener`);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/sesion/:vendedorId/registrar-lid
+ * Registra manualmente un mapeo @lid → teléfono real para contactos en WhatsApp Privacy Mode.
+ * Solo se necesita hacer una vez por contacto — el mapeo se persiste en disco.
+ * Body: { "lid": "43735786217544", "phone": "50660020956" }
+ */
+router.post('/sesion/:vendedorId/registrar-lid', (req, res) => {
+  const { vendedorId } = req.params;
+  const { lid, phone } = req.body;
+
+  if (!lid || !phone) {
+    return res.status(400).json({ error: 'Faltan campos: lid, phone' });
+  }
+
+  try {
+    const result = registrarLid(vendedorId, lid, phone);
+    res.json({ success: true, ...result });
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });

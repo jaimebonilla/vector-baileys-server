@@ -264,9 +264,9 @@ async function conectarSupervisor(vendedorId, sessionPath) {
           }
 
           if (!prospecto_numero) {
-            // Debug dump: log full msg.key so we can identify what fields carry the phone
-            console.log(`[upsert] ⚠️ @lid sin resolver — msg.key:`, JSON.stringify(msg.key));
-            console.log(`[upsert] ⚠️ msg.pushName=${msg.pushName} msg.participant=${msg.participant}`);
+            console.log(`[lid-map] ⚠️ @lid sin mapeo — registrar con:`);
+            console.log(`[lid-map]   POST /api/sesion/${vendedorId}/registrar-lid`);
+            console.log(`[lid-map]   Body: { "lid": "${jid.replace('@lid','')}", "phone": "NUMERO_DEL_CLIENTE" }`);
           }
         }
 
@@ -389,6 +389,33 @@ async function limpiarTodasLasSesionesSupervisores() {
   }
 }
 
+/**
+ * Registra manualmente un mapeo @lid → phone para una sesión.
+ * Persiste en disco y aplica de inmediato para mensajes futuros.
+ */
+function registrarLid(vendedorId, lid, phone) {
+  const sessionPath = path.join(SESSIONS_DIR, `supervisor-${vendedorId}`);
+  const sesion = sesiones.get(vendedorId);
+
+  // Normalizar: aceptar con o sin sufijo @lid
+  const lidKey = lid.endsWith('@lid') ? lid : `${lid}@lid`;
+  const phoneClean = phone.replace(/\D/g, '');
+
+  // Actualizar mapa en memoria si la sesión está activa
+  if (sesion?.lidToPhone) {
+    sesion.lidToPhone.set(lidKey, phoneClean);
+  }
+
+  // Persistir en disco (también funciona si la sesión no está activa aún)
+  const map = loadLidMap(sessionPath);
+  map.set(lidKey, phoneClean);
+  fs.mkdirSync(sessionPath, { recursive: true });
+  saveLidMap(sessionPath, map);
+
+  console.log(`[lid-map] Registrado manualmente: ${lidKey} → ${phoneClean}`);
+  return { lid: lidKey, phone: phoneClean };
+}
+
 module.exports = {
   iniciarSesionSupervisor,
   reiniciarSesionSupervisor,
@@ -397,5 +424,6 @@ module.exports = {
   limpiarTodasLasSesionesSupervisores,
   getSesionesActivas,
   getEstadoSesion,
-  getQRSesion
+  getQRSesion,
+  registrarLid
 };
