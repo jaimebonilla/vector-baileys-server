@@ -124,52 +124,39 @@ async function iniciarSesionSupervisor(vendedorId) {
 async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-  if (!supabaseUrl || !supabaseKey) {
-    console.log('[lid-auto] SUPABASE_URL o SUPABASE_SERVICE_KEY no configurados — omitiendo auto-mapeo');
-    return;
-  }
+  if (!supabaseUrl || !supabaseKey) return;
 
   try {
-    // Obtener teléfonos de clientes del vendedor desde Supabase
+    // Usar la tabla 'conversaciones' que sí existe en este schema
     const res = await fetch(
-      `${supabaseUrl}/rest/v1/clientes?select=telefono&vendedor_id=eq.${encodeURIComponent(vendedorId)}`,
+      `${supabaseUrl}/rest/v1/conversaciones?select=prospecto_numero&vendedor_id=eq.${encodeURIComponent(vendedorId)}`,
       { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
     );
     if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
-    const clientes = await res.json();
+    const rows = await res.json();
 
-    const telefonos = clientes.map(c => c.telefono).filter(Boolean);
+    const telefonos = [...new Set(rows.map(r => r.prospecto_numero).filter(Boolean))];
     if (telefonos.length === 0) {
-      console.log(`[lid-auto] ${vendedorId} | sin clientes en BD`);
+      console.log(`[lid-auto] ${vendedorId} | sin conversaciones previas — se mapeará en el primer mensaje`);
       return;
     }
-    console.log(`[lid-auto] ${vendedorId} | ${telefonos.length} clientes encontrados — consultando WhatsApp...`);
+    console.log(`[lid-auto] ${vendedorId} | ${telefonos.length} prospectos conocidos — consultando WhatsApp...`);
 
-    // onWhatsApp en lotes de 50 para no saturar
     const BATCH = 50;
     let nuevos = 0;
     for (let i = 0; i < telefonos.length; i += BATCH) {
       const lote = telefonos.slice(i, i + BATCH);
       try {
         const results = await sock.onWhatsApp(...lote);
-        for (const r of results) {
-          if (!r.exists) continue;
-          // Si WhatsApp devuelve @lid, guardamos el mapeo lid → teléfono
-          if (r.jid && r.jid.endsWith('@lid')) {
-            const phone = r.input || lote[results.indexOf(r)];
-            if (phone && !lidToPhone.has(r.jid)) {
-              lidToPhone.set(r.jid, String(phone).replace(/\D/g, ''));
-              nuevos++;
-            }
-          }
-          // Si devuelve @s.whatsapp.net, también lo guardamos para uniformidad
-          if (r.jid && r.jid.endsWith('@s.whatsapp.net')) {
-            const phone = String(r.input || '').replace(/\D/g, '');
-            const jidLimpio = r.jid.replace('@s.whatsapp.net', '');
-            if (phone && jidLimpio !== phone) {
-              lidToPhone.set(r.jid, phone);
-              nuevos++;
-            }
+        for (let j = 0; j < results.length; j++) {
+          const r = results[j];
+          const phone = String(lote[j] || '').replace(/\D/g, '');
+          if (!r?.exists || !phone) continue;
+          const jid = r.jid;
+          if (jid && !lidToPhone.has(jid)) {
+            lidToPhone.set(jid, phone);
+            nuevos++;
+            console.log(`[lid-auto] ${vendedorId} | ${jid} → ${phone}`);
           }
         }
       } catch (batchErr) {
@@ -298,22 +285,21 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us')) {
           prospecto_numero = jid.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '');
         } else if (jid.endsWith('@lid')) {
-          // Try every known field that might carry the real phone
-          const candidatos = [
-            msg.key.senderPn,
-            msg.key.participant,
-            msg.participant,
-          ].filter(v => v && (v.endsWith('@s.whatsapp.net') || v.endsWith('@c.us')));
-
-          if (candidatos.length > 0) {
-            addLidMapping(jid, candidatos[0]);
-            prospecto_numero = lidToPhone.get(jid);
-          } else {
-            prospecto_numero = lidToPhone.get(jid) || null;
+          // senderPn está en msg.key (viene del atributo sender_pn del stanza de WhatsApp)
+          // Solo presente en mensajes ENTRANTES donde WA lo incluye como hint del teléfono real
+          const senderPn = msg.key.senderPn;
+          if (senderPn) {
+            // Normalizar: puede venir como "50660020956" o "50660020956@s.whatsapp.net"
+            const phone = senderPn.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '').replace(/\D/g, '');
+            if (phone) addLidMapping(jid, phone);
           }
 
+          prospecto_numero = lidToPhone.get(jid) || null;
+
           if (!prospecto_numero) {
-            console.log(`[lid-map] ${vendedorId} | @lid sin mapeo: ${jid} — probable no-cliente, ignorando`);
+            // Log completo del key para diagnóstico (solo cuando no hay mapeo)
+            console.log(`[lid-debug] key:`, JSON.stringify(msg.key));
+            console.log(`[lid-map] ${vendedorId} | @lid sin mapeo: ${jid} — ignorando`);
           }
         }
 
