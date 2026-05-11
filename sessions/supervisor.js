@@ -148,22 +148,29 @@ async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
       const lote = telefonos.slice(i, i + BATCH);
       try {
         const results = await sock.onWhatsApp(...lote);
-        for (let j = 0; j < results.length; j++) {
-          const r = results[j];
-          const phone = String(lote[j] || '').replace(/\D/g, '');
-          if (!r?.exists || !phone) continue;
+        // IMPORTANTE: onWhatsApp filtra resultados (solo devuelve los que existen),
+        // por lo que results[j] NO corresponde necesariamente a lote[j].
+        // Derivar el teléfono DESDE r.jid, no desde el índice del array.
+        for (const r of (results || [])) {
+          if (!r?.exists || !r.jid) continue;
 
-          // Mapear JID normal (@s.whatsapp.net)
-          if (r.jid && !lidToPhone.has(r.jid)) {
+          // El jid devuelto es "50660020956@s.whatsapp.net" — extraer solo dígitos
+          const phone = r.jid
+            .replace(/@s\.whatsapp\.net$/, '')
+            .replace(/@c\.us$/, '')
+            .replace(/\D/g, '');
+          if (!phone) continue;
+
+          // Mapear jid normal → phone
+          if (!lidToPhone.has(r.jid)) {
             lidToPhone.set(r.jid, phone);
             nuevos++;
-            console.log(`[lid-auto] ${vendedorId} | ${r.jid} → ${phone}`);
           }
-          // Mapear @lid (Privacy Mode) — este es el campo que faltaba
+          // Mapear @lid → phone (Privacy Mode) — CAMPO CLAVE
           if (r.lid && r.lid !== r.jid && !lidToPhone.has(r.lid)) {
             lidToPhone.set(r.lid, phone);
             nuevos++;
-            console.log(`[lid-auto] ${vendedorId} | ${r.lid} → ${phone} (@lid)`);
+            console.log(`[lid-auto] ${vendedorId} | ${r.lid} → ${phone}`);
           }
         }
       } catch (batchErr) {
