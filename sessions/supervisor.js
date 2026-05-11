@@ -85,7 +85,8 @@ async function iniciarSesionSupervisor(vendedorId) {
     qr: null,
     reintentos: existente ? existente.reintentos : 0,
     socket: null,
-    conectadoEn: null
+    conectadoEn: null,
+    lidToPhone: existente?.lidToPhone || new Map()
   });
 
   appLogger.info(`🟡 Iniciando sesión supervisor: ${vendedorId}`);
@@ -122,8 +123,23 @@ async function conectarSupervisor(vendedorId, sessionPath) {
     sesion.estado = 'conectando';
     sesion.qr = null;
 
+    // lid → real phone (digits only). Populated from contacts sync and incoming senderPn.
+    const lidToPhone = sesion.lidToPhone || new Map();
+    sesion.lidToPhone = lidToPhone;
+
     // Guardar credenciales
     sock.ev.on('creds.update', saveCreds);
+
+    // Resolve @lid JIDs to real phone numbers using contact sync data
+    sock.ev.on('contacts.upsert', (contacts) => {
+      for (const c of contacts) {
+        if (c.lid && c.id && c.id.includes('@s.whatsapp.net')) {
+          const phone = c.id.replace(/@s\.whatsapp\.net$/, '');
+          lidToPhone.set(c.lid, phone);
+        }
+      }
+      console.log(`[contacts] ${vendedorId} | lidToPhone size: ${lidToPhone.size}`);
+    });
 
     // Evento de conexión
     sock.ev.on('connection.update', async (update) => {
@@ -184,12 +200,28 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         if (!texto) continue;
 
         const direccion = msg.key.fromMe ? 'saliente' : 'entrante';
-        const prospecto_numero = jid
-          .replace(/@s\.whatsapp\.net$/, '')
-          .replace(/@c\.us$/, '')
-          .replace(/@lid$/, '');
+
+        // Resolve real phone number from JID
+        let prospecto_numero;
+        if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us')) {
+          prospecto_numero = jid.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '');
+        } else if (jid.endsWith('@lid')) {
+          // For incoming: senderPn carries the real phone; cache it for outgoing replies
+          if (!msg.key.fromMe && msg.key.senderPn) {
+            const phone = msg.key.senderPn.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '');
+            lidToPhone.set(jid, phone);
+            prospecto_numero = phone;
+          } else {
+            prospecto_numero = lidToPhone.get(jid) || null;
+          }
+        }
 
         console.log(`[upsert] from=${msg.key.fromMe} jid=${jid} prospecto=${prospecto_numero} dir=${direccion}`);
+
+        if (!prospecto_numero) {
+          console.log(`[upsert] ⚠️ No se pudo resolver número para ${jid} — ignorando`);
+          continue;
+        }
 
         try {
           let analisis = null;
