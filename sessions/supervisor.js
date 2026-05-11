@@ -122,21 +122,30 @@ async function iniciarSesionSupervisor(vendedorId) {
  * Usa SERVICE_KEY que bypass RLS — cubre clientes nuevos que aún no tienen conversación.
  */
 async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-  if (!supabaseUrl || !supabaseKey) return;
-
   try {
-    // Tabla clientes: todos los activos con teléfono (SERVICE_KEY bypasses RLS)
-    const res = await fetch(
-      `${supabaseUrl}/rest/v1/clientes?select=telefono&activo=eq.true&telefono=not.is.null`,
-      { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
-    );
-    if (!res.ok) throw new Error(`Supabase clientes ${res.status}: ${await res.text()}`);
-    const rows = await res.json();
+    // Usar el proxy de Lovable para obtener los teléfonos de clientes
+    // (clientes está en un schema no-público, no accesible via REST directo)
+    console.log(`[lid-auto] ${vendedorId} | consultando clientes via proxy...`);
+    const res = await fetch(`${EDGE_FUNCTION_BASE}/consultar-conversaciones`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vendedor_id: vendedorId })
+    });
+    if (!res.ok) throw new Error(`Proxy consultar-conversaciones ${res.status}: ${await res.text()}`);
+    const rawData = await res.json();
+    console.log(`[lid-auto] ${vendedorId} | respuesta proxy (primeros 2):`, JSON.stringify(Array.isArray(rawData) ? rawData.slice(0, 2) : rawData));
 
-    const telefonos = [...new Set(rows.map(r => r.telefono).filter(Boolean))];
-    console.log(`[lid-auto] ${vendedorId} | clientes encontrados en DB: ${telefonos.length} → [${telefonos.join(', ')}]`);
+    // El proxy puede devolver array directo o { clientes: [...] } o { data: [...] }
+    const rows = Array.isArray(rawData) ? rawData
+      : Array.isArray(rawData?.clientes) ? rawData.clientes
+      : Array.isArray(rawData?.data) ? rawData.data
+      : [];
+
+    // Aceptar campo telefono o prospecto_numero
+    const telefonos = [...new Set(
+      rows.map(r => r.telefono || r.prospecto_numero || r.phone || r.numero).filter(Boolean)
+    )];
+    console.log(`[lid-auto] ${vendedorId} | teléfonos extraídos: ${telefonos.length} → [${telefonos.join(', ')}]`);
     if (telefonos.length === 0) {
       console.log(`[lid-auto] ${vendedorId} | sin clientes con teléfono activos`);
       return;
@@ -246,7 +255,7 @@ async function conectarSupervisor(vendedorId, sessionPath) {
     // lid → real phone (digits only). Persisted to disk so it survives redeploys.
     const lidToPhone = loadLidMap(sessionPath);
     sesion.lidToPhone = lidToPhone;
-    console.log(`[lid-map] ${vendedorId} | cargado desde disco: ${lidToPhone.size} entradas`);
+    console.log(`[lid-map] ${vendedorId} | cargado desde disco: ${lidToPhone.size} entradas`, JSON.stringify(Object.fromEntries(lidToPhone)));
 
     function addLidMapping(lid, phoneJid) {
       const phone = phoneJid.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '');
