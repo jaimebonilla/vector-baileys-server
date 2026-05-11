@@ -115,6 +115,75 @@ async function iniciarSesionSupervisor(vendedorId) {
   await conectarSupervisor(vendedorId, sessionPath);
 }
 
+/**
+ * Consulta Supabase para obtener los teléfonos de clientes del vendedor,
+ * llama a sock.onWhatsApp() para cada uno y, si WhatsApp responde con un
+ * JID @lid (Privacy Mode), guarda el mapeo lid → teléfono en disco.
+ * Totalmente automático, sin intervención manual.
+ */
+async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    console.log('[lid-auto] SUPABASE_URL o SUPABASE_SERVICE_KEY no configurados — omitiendo auto-mapeo');
+    return;
+  }
+
+  try {
+    // Obtener teléfonos de clientes del vendedor desde Supabase
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/clientes?select=telefono&vendedor_id=eq.${encodeURIComponent(vendedorId)}`,
+      { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
+    );
+    if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+    const clientes = await res.json();
+
+    const telefonos = clientes.map(c => c.telefono).filter(Boolean);
+    if (telefonos.length === 0) {
+      console.log(`[lid-auto] ${vendedorId} | sin clientes en BD`);
+      return;
+    }
+    console.log(`[lid-auto] ${vendedorId} | ${telefonos.length} clientes encontrados — consultando WhatsApp...`);
+
+    // onWhatsApp en lotes de 50 para no saturar
+    const BATCH = 50;
+    let nuevos = 0;
+    for (let i = 0; i < telefonos.length; i += BATCH) {
+      const lote = telefonos.slice(i, i + BATCH);
+      try {
+        const results = await sock.onWhatsApp(...lote);
+        for (const r of results) {
+          if (!r.exists) continue;
+          // Si WhatsApp devuelve @lid, guardamos el mapeo lid → teléfono
+          if (r.jid && r.jid.endsWith('@lid')) {
+            const phone = r.input || lote[results.indexOf(r)];
+            if (phone && !lidToPhone.has(r.jid)) {
+              lidToPhone.set(r.jid, String(phone).replace(/\D/g, ''));
+              nuevos++;
+            }
+          }
+          // Si devuelve @s.whatsapp.net, también lo guardamos para uniformidad
+          if (r.jid && r.jid.endsWith('@s.whatsapp.net')) {
+            const phone = String(r.input || '').replace(/\D/g, '');
+            const jidLimpio = r.jid.replace('@s.whatsapp.net', '');
+            if (phone && jidLimpio !== phone) {
+              lidToPhone.set(r.jid, phone);
+              nuevos++;
+            }
+          }
+        }
+      } catch (batchErr) {
+        console.log(`[lid-auto] Error en lote:`, batchErr.message);
+      }
+    }
+
+    if (nuevos > 0) saveLidMap(sessionPath, lidToPhone);
+    console.log(`[lid-auto] ${vendedorId} | mapeados=${nuevos} total=${lidToPhone.size}`);
+  } catch (err) {
+    console.log(`[lid-auto] ${vendedorId} | Error:`, err.message);
+  }
+}
+
 async function conectarSupervisor(vendedorId, sessionPath) {
   const appLogger = global.logger;
   const sesion = sesiones.get(vendedorId);
@@ -161,29 +230,6 @@ async function conectarSupervisor(vendedorId, sessionPath) {
     // Guardar credenciales
     sock.ev.on('creds.update', saveCreds);
 
-    // Contacts sync: fires on initial connection with ALL contacts
-    const handleContacts = (contacts) => {
-      let mapped = 0;
-      for (const c of contacts) {
-        // Standard format: c.id = phone JID, c.lid = @lid JID
-        if (c.lid && c.id && (c.id.endsWith('@s.whatsapp.net') || c.id.endsWith('@c.us'))) {
-          addLidMapping(c.lid, c.id);
-          mapped++;
-        }
-        // Reverse format: c.id = @lid JID, check for phone in other fields
-        if (c.id && c.id.endsWith('@lid') && c.notify) {
-          console.log(`[contacts] @lid sin teléfono: ${c.id} notify=${c.notify}`);
-        }
-      }
-      console.log(`[contacts] ${vendedorId} | recibidos=${contacts.length} mapeados=${mapped} total=${lidToPhone.size}`);
-      // Debug: log first contact structure to understand available fields
-      if (contacts.length > 0) {
-        console.log(`[contacts] sample:`, JSON.stringify(contacts[0]));
-      }
-    };
-    sock.ev.on('contacts.upsert', handleContacts);
-    sock.ev.on('contacts.update', handleContacts);
-
     // Evento de conexión
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
@@ -200,6 +246,9 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         sesion.reintentos = 0;
         sesion.conectadoEn = new Date().toISOString();
         appLogger.info(`✅ Supervisor ${vendedorId} conectado`);
+
+        // Auto-mapear @lid ↔ teléfono consultando los clientes registrados en Supabase
+        setTimeout(() => autoMapearLids(vendedorId, sock, lidToPhone, sessionPath), 3000);
       }
 
       if (connection === 'close') {
@@ -264,9 +313,7 @@ async function conectarSupervisor(vendedorId, sessionPath) {
           }
 
           if (!prospecto_numero) {
-            console.log(`[lid-map] ⚠️ @lid sin mapeo — registrar con:`);
-            console.log(`[lid-map]   POST /api/sesion/${vendedorId}/registrar-lid`);
-            console.log(`[lid-map]   Body: { "lid": "${jid.replace('@lid','')}", "phone": "NUMERO_DEL_CLIENTE" }`);
+            console.log(`[lid-map] ${vendedorId} | @lid sin mapeo: ${jid} — probable no-cliente, ignorando`);
           }
         }
 
