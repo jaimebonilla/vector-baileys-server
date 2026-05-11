@@ -359,9 +359,14 @@ async function conectarSupervisor(vendedorId, sessionPath) {
           // 2. Mapa local (cargado de disco, llenado por autoMapearLids o senderPn)
           prospecto_numero = lidToPhone.get(jid) || null;
 
+          // 3. @lid desconocido → refrescar mapa (cubre clientes nuevos agregados después del arranque)
           if (!prospecto_numero) {
-            console.log(`[lid-map] ${vendedorId} | @lid sin mapeo: ${jid}`);
-            console.log(`[lid-map] ${vendedorId} | mapa actual (${lidToPhone.size} entradas):`, JSON.stringify(Object.fromEntries(lidToPhone)));
+            console.log(`[lid-map] ${vendedorId} | @lid desconocido ${jid} — refrescando mapa...`);
+            await autoMapearLids(vendedorId, sock, lidToPhone, sessionPath);
+            prospecto_numero = lidToPhone.get(jid) || null;
+            if (!prospecto_numero) {
+              console.log(`[lid-map] ${vendedorId} | ${jid} no corresponde a ningún cliente registrado — ignorando`);
+            }
           }
         }
 
