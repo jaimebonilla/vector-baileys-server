@@ -116,10 +116,10 @@ async function iniciarSesionSupervisor(vendedorId) {
 }
 
 /**
- * Consulta Supabase para obtener los teléfonos de clientes del vendedor,
+ * Consulta la tabla `clientes` (todos los activos con teléfono),
  * llama a sock.onWhatsApp() para cada uno y, si WhatsApp responde con un
  * JID @lid (Privacy Mode), guarda el mapeo lid → teléfono en disco.
- * Totalmente automático, sin intervención manual.
+ * Usa SERVICE_KEY que bypass RLS — cubre clientes nuevos que aún no tienen conversación.
  */
 async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
   const supabaseUrl = process.env.SUPABASE_URL;
@@ -127,20 +127,20 @@ async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
   if (!supabaseUrl || !supabaseKey) return;
 
   try {
-    // Usar la tabla 'conversaciones' que sí existe en este schema
+    // Tabla clientes: todos los activos con teléfono (SERVICE_KEY bypasses RLS)
     const res = await fetch(
-      `${supabaseUrl}/rest/v1/conversaciones?select=prospecto_numero&vendedor_id=eq.${encodeURIComponent(vendedorId)}`,
+      `${supabaseUrl}/rest/v1/clientes?select=telefono&activo=eq.true&telefono=not.is.null`,
       { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
     );
-    if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new Error(`Supabase clientes ${res.status}: ${await res.text()}`);
     const rows = await res.json();
 
-    const telefonos = [...new Set(rows.map(r => r.prospecto_numero).filter(Boolean))];
+    const telefonos = [...new Set(rows.map(r => r.telefono).filter(Boolean))];
     if (telefonos.length === 0) {
-      console.log(`[lid-auto] ${vendedorId} | sin conversaciones previas — se mapeará en el primer mensaje`);
+      console.log(`[lid-auto] ${vendedorId} | sin clientes activos en DB`);
       return;
     }
-    console.log(`[lid-auto] ${vendedorId} | ${telefonos.length} prospectos conocidos — consultando WhatsApp...`);
+    console.log(`[lid-auto] ${vendedorId} | ${telefonos.length} clientes activos — consultando WhatsApp...`);
 
     const BATCH = 50;
     let nuevos = 0;
@@ -182,6 +182,38 @@ async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
     console.log(`[lid-auto] ${vendedorId} | mapeados=${nuevos} total=${lidToPhone.size}`);
   } catch (err) {
     console.log(`[lid-auto] ${vendedorId} | Error:`, err.message);
+  }
+}
+
+/**
+ * Fallback: cuando un @lid no está en el mapa local, pregunta al proxy de Lovable.
+ * El proxy busca en su tabla de clientes por el lid y devuelve el teléfono si lo encuentra.
+ * @returns {string|null} teléfono solo dígitos, o null si no encontrado
+ */
+async function resolverLidViaProxy(lid, vendedorId) {
+  try {
+    const lidSinSufijo = lid.replace(/@lid$/, '');
+    const res = await fetch(`${EDGE_FUNCTION_BASE}/buscar-prospecto-por-lid`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lid: lidSinSufijo, vendedor_id: vendedorId })
+    });
+    if (!res.ok) {
+      console.log(`[lid-proxy] ${vendedorId} | proxy respondió ${res.status} para ${lid}`);
+      return null;
+    }
+    const data = await res.json();
+    // Aceptar cualquier campo razonable que devuelva el proxy
+    const telefono = data?.telefono || data?.phone || data?.prospecto_numero || data?.numero || null;
+    if (telefono) {
+      console.log(`[lid-proxy] ${vendedorId} | ${lid} → ${telefono} (via proxy)`);
+    } else {
+      console.log(`[lid-proxy] ${vendedorId} | proxy no encontró mapeo para ${lid}:`, JSON.stringify(data));
+    }
+    return telefono ? String(telefono).replace(/\D/g, '') : null;
+  } catch (err) {
+    console.log(`[lid-proxy] ${vendedorId} | error consultando proxy para ${lid}:`, err.message);
+    return null;
   }
 }
 
@@ -311,20 +343,26 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us')) {
           prospecto_numero = jid.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '');
         } else if (jid.endsWith('@lid')) {
-          // senderPn está en msg.key (viene del atributo sender_pn del stanza de WhatsApp)
-          // Solo presente en mensajes ENTRANTES donde WA lo incluye como hint del teléfono real
+          // 1. senderPn: hint del teléfono real, solo en mensajes entrantes
           const senderPn = msg.key.senderPn;
           if (senderPn) {
-            // Normalizar: puede venir como "50660020956" o "50660020956@s.whatsapp.net"
             const phone = senderPn.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '').replace(/\D/g, '');
             if (phone) addLidMapping(jid, phone);
           }
 
+          // 2. Mapa local (cargado de disco o ya resuelto antes)
           prospecto_numero = lidToPhone.get(jid) || null;
 
+          // 3. Fallback: preguntar al proxy de Lovable
           if (!prospecto_numero) {
-            // Log completo del key para diagnóstico (solo cuando no hay mapeo)
-            console.log(`[lid-debug] key:`, JSON.stringify(msg.key));
+            const resuelto = await resolverLidViaProxy(jid, vendedorId);
+            if (resuelto) {
+              addLidMapping(jid, resuelto);
+              prospecto_numero = resuelto;
+            }
+          }
+
+          if (!prospecto_numero) {
             console.log(`[lid-map] ${vendedorId} | @lid sin mapeo: ${jid} — ignorando`);
           }
         }
