@@ -152,11 +152,18 @@ async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
           const r = results[j];
           const phone = String(lote[j] || '').replace(/\D/g, '');
           if (!r?.exists || !phone) continue;
-          const jid = r.jid;
-          if (jid && !lidToPhone.has(jid)) {
-            lidToPhone.set(jid, phone);
+
+          // Mapear JID normal (@s.whatsapp.net)
+          if (r.jid && !lidToPhone.has(r.jid)) {
+            lidToPhone.set(r.jid, phone);
             nuevos++;
-            console.log(`[lid-auto] ${vendedorId} | ${jid} → ${phone}`);
+            console.log(`[lid-auto] ${vendedorId} | ${r.jid} → ${phone}`);
+          }
+          // Mapear @lid (Privacy Mode) — este es el campo que faltaba
+          if (r.lid && r.lid !== r.jid && !lidToPhone.has(r.lid)) {
+            lidToPhone.set(r.lid, phone);
+            nuevos++;
+            console.log(`[lid-auto] ${vendedorId} | ${r.lid} → ${phone} (@lid)`);
           }
         }
       } catch (batchErr) {
@@ -216,6 +223,18 @@ async function conectarSupervisor(vendedorId, sessionPath) {
 
     // Guardar credenciales
     sock.ev.on('creds.update', saveCreds);
+
+    // WhatsApp a veces envía el mapeo lid ↔ teléfono como evento explícito
+    sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
+      if (lid && jid) {
+        const phone = jid.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '');
+        if (!lidToPhone.has(lid)) {
+          lidToPhone.set(lid, phone);
+          saveLidMap(sessionPath, lidToPhone);
+          console.log(`[lid-map] phoneNumberShare: ${lid} → ${phone}`);
+        }
+      }
+    });
 
     // Evento de conexión
     sock.ev.on('connection.update', async (update) => {
