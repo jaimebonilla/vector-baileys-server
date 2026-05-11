@@ -13,7 +13,28 @@ const { analizarMensaje } = require('../services/claude');
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions_data');
 const MAX_REINTENTOS = 10;
 const EDGE_FUNCTION_BASE = 'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy';
-const logger = pino({ level: 'silent' }); // Logger silencioso para Baileys
+const logger = pino({ level: 'silent' });
+
+function lidMapPath(sessionPath) {
+  return path.join(sessionPath, 'lid-map.json');
+}
+
+function loadLidMap(sessionPath) {
+  try {
+    const data = JSON.parse(fs.readFileSync(lidMapPath(sessionPath), 'utf8'));
+    return new Map(Object.entries(data));
+  } catch {
+    return new Map();
+  }
+}
+
+function saveLidMap(sessionPath, map) {
+  try {
+    fs.writeFileSync(lidMapPath(sessionPath), JSON.stringify(Object.fromEntries(map)));
+  } catch (err) {
+    console.error('[lid-map] Error guardando:', err.message);
+  }
+}
 
 async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante, analisis = null, prospectoNombre = null) {
   try {
@@ -123,23 +144,45 @@ async function conectarSupervisor(vendedorId, sessionPath) {
     sesion.estado = 'conectando';
     sesion.qr = null;
 
-    // lid → real phone (digits only). Populated from contacts sync and incoming senderPn.
-    const lidToPhone = sesion.lidToPhone || new Map();
+    // lid → real phone (digits only). Persisted to disk so it survives redeploys.
+    const lidToPhone = loadLidMap(sessionPath);
     sesion.lidToPhone = lidToPhone;
+    console.log(`[lid-map] ${vendedorId} | cargado desde disco: ${lidToPhone.size} entradas`);
+
+    function addLidMapping(lid, phoneJid) {
+      const phone = phoneJid.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '');
+      if (!lidToPhone.has(lid)) {
+        lidToPhone.set(lid, phone);
+        saveLidMap(sessionPath, lidToPhone);
+        console.log(`[lid-map] ${vendedorId} | nuevo: ${lid} → ${phone} (total: ${lidToPhone.size})`);
+      }
+    }
 
     // Guardar credenciales
     sock.ev.on('creds.update', saveCreds);
 
-    // Resolve @lid JIDs to real phone numbers using contact sync data
-    sock.ev.on('contacts.upsert', (contacts) => {
+    // Contacts sync: fires on initial connection with ALL contacts
+    const handleContacts = (contacts) => {
+      let mapped = 0;
       for (const c of contacts) {
-        if (c.lid && c.id && c.id.includes('@s.whatsapp.net')) {
-          const phone = c.id.replace(/@s\.whatsapp\.net$/, '');
-          lidToPhone.set(c.lid, phone);
+        // Standard format: c.id = phone JID, c.lid = @lid JID
+        if (c.lid && c.id && (c.id.endsWith('@s.whatsapp.net') || c.id.endsWith('@c.us'))) {
+          addLidMapping(c.lid, c.id);
+          mapped++;
+        }
+        // Reverse format: c.id = @lid JID, check for phone in other fields
+        if (c.id && c.id.endsWith('@lid') && c.notify) {
+          console.log(`[contacts] @lid sin teléfono: ${c.id} notify=${c.notify}`);
         }
       }
-      console.log(`[contacts] ${vendedorId} | lidToPhone size: ${lidToPhone.size}`);
-    });
+      console.log(`[contacts] ${vendedorId} | recibidos=${contacts.length} mapeados=${mapped} total=${lidToPhone.size}`);
+      // Debug: log first contact structure to understand available fields
+      if (contacts.length > 0) {
+        console.log(`[contacts] sample:`, JSON.stringify(contacts[0]));
+      }
+    };
+    sock.ev.on('contacts.upsert', handleContacts);
+    sock.ev.on('contacts.update', handleContacts);
 
     // Evento de conexión
     sock.ev.on('connection.update', async (update) => {
@@ -206,13 +249,24 @@ async function conectarSupervisor(vendedorId, sessionPath) {
         if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us')) {
           prospecto_numero = jid.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '');
         } else if (jid.endsWith('@lid')) {
-          // For incoming: senderPn carries the real phone; cache it for outgoing replies
-          if (!msg.key.fromMe && msg.key.senderPn) {
-            const phone = msg.key.senderPn.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '');
-            lidToPhone.set(jid, phone);
-            prospecto_numero = phone;
+          // Try every known field that might carry the real phone
+          const candidatos = [
+            msg.key.senderPn,
+            msg.key.participant,
+            msg.participant,
+          ].filter(v => v && (v.endsWith('@s.whatsapp.net') || v.endsWith('@c.us')));
+
+          if (candidatos.length > 0) {
+            addLidMapping(jid, candidatos[0]);
+            prospecto_numero = lidToPhone.get(jid);
           } else {
             prospecto_numero = lidToPhone.get(jid) || null;
+          }
+
+          if (!prospecto_numero) {
+            // Debug dump: log full msg.key so we can identify what fields carry the phone
+            console.log(`[upsert] ⚠️ @lid sin resolver — msg.key:`, JSON.stringify(msg.key));
+            console.log(`[upsert] ⚠️ msg.pushName=${msg.pushName} msg.participant=${msg.participant}`);
           }
         }
 
