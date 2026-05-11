@@ -42,7 +42,7 @@ async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante
   }
 }
 
-// Mapa de sesiones activas: vendedorId -> { socket, estado, qr, reintentos, conversacionesMap }
+// Mapa de sesiones activas: vendedorId -> { socket, estado, qr, reintentos }
 const sesiones = new Map();
 
 function getSesionesActivas() {
@@ -80,14 +80,12 @@ async function iniciarSesionSupervisor(vendedorId) {
   const sessionPath = path.join(SESSIONS_DIR, `supervisor-${vendedorId}`);
   fs.mkdirSync(sessionPath, { recursive: true });
 
-  // Inicializar entrada en el mapa — conservar conversacionesMap si ya existía
   sesiones.set(vendedorId, {
     estado: 'iniciando',
     qr: null,
     reintentos: existente ? existente.reintentos : 0,
     socket: null,
-    conectadoEn: null,
-    conversacionesMap: existente?.conversacionesMap || new Map() // persistir entre reconexiones
+    conectadoEn: null
   });
 
   appLogger.info(`🟡 Iniciando sesión supervisor: ${vendedorId}`);
@@ -123,9 +121,6 @@ async function conectarSupervisor(vendedorId, sessionPath) {
     sesion.socket = sock;
     sesion.estado = 'conectando';
     sesion.qr = null;
-
-    // Map local por vendedor: "@lid" → número real del prospecto
-    const conversacionesMap = sesion.conversacionesMap;
 
     // Guardar credenciales
     sock.ev.on('creds.update', saveCreds);
@@ -182,112 +177,32 @@ async function conectarSupervisor(vendedorId, sessionPath) {
       for (const msg of messages) {
         if (!msg.message) continue;
 
-        const remoteJid = msg.key.remoteJid;
+        const jid = msg.key.remoteJid;
+        if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) continue;
 
-        // A) Filtrar estados de WhatsApp y broadcasts (no son conversaciones reales)
-        if (remoteJid.includes('broadcast') || remoteJid === 'status@broadcast') {
-          console.log(`⏭️ ${vendedorId} | Ignorando estado/broadcast: ${remoteJid}`);
-          continue;
-        }
-
-        // Ignorar grupos
-        if (remoteJid.endsWith('@g.us')) continue;
-
-        // Extraer texto
         const texto = extraerTexto(msg.message);
         if (!texto) continue;
 
-        const esDelVendedor = msg.key.fromMe === true;
-        const direccion = esDelVendedor ? 'saliente' : 'entrante';
-        let numeroProspecto;
+        const direccion = msg.key.fromMe ? 'saliente' : 'entrante';
+        const prospecto_numero = jid
+          .replace(/@s\.whatsapp\.net$/, '')
+          .replace(/@c\.us$/, '')
+          .replace(/@lid$/, '');
 
-        if (!esDelVendedor) {
-          // ── MENSAJE ENTRANTE ──────────────────────────────────────────
-          // senderPn tiene el número real del cliente
-          numeroProspecto = msg.key.senderPn || remoteJid;
-
-          // Guardar mapeo @lid → número real para futuros mensajes salientes
-          // Solo si el número resuelto es un número real (@s.whatsapp.net), no un @lid
-          if (remoteJid.includes('@lid') && numeroProspecto.includes('@s.whatsapp.net')) {
-            // C) No sobrescribir si ya existe un mapeo válido para esta conversación
-            if (!conversacionesMap.has(remoteJid)) {
-              conversacionesMap.set(remoteJid, numeroProspecto);
-              console.log(`📋 ${vendedorId} | Nuevo mapeo: ${remoteJid} → ${numeroProspecto}`);
-            } else {
-              console.log(`📋 ${vendedorId} | Mapeo ya existe: ${remoteJid} → ${conversacionesMap.get(remoteJid)}`);
-            }
-          }
-
-        } else {
-          // ── MENSAJE SALIENTE ──────────────────────────────────────────
-          console.log(`📤 ${vendedorId} | Mensaje SALIENTE detectado`);
-          console.log(`📤 ${vendedorId} | remoteJid: ${remoteJid}`);
-
-          if (remoteJid.includes('@s.whatsapp.net')) {
-            // remoteJid ya contiene el número real
-            numeroProspecto = remoteJid;
-            console.log(`📱 ${vendedorId} | Saliente directo: ${remoteJid}`);
-
-          } else if (remoteJid.includes('@lid')) {
-            // B) Logs detallados para debug del mapeo @lid
-            console.log(`🔍 ${vendedorId} | Buscando en Map para @lid: ${remoteJid}`);
-            numeroProspecto = conversacionesMap.get(remoteJid);
-            console.log(`✅ ${vendedorId} | Resultado del Map: ${numeroProspecto || 'NO ENCONTRADO'}`);
-
-            if (!numeroProspecto) {
-              // Fallback: consultar Supabase
-              console.log(`🔍 ${vendedorId} | Buscando en BD para: ${remoteJid}`);
-              try {
-                const response = await fetch(`${EDGE_FUNCTION_BASE}/buscar-prospecto-por-lid`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ vendedor_id: vendedorId, lid_id: remoteJid })
-                });
-                const { prospecto_numero } = await response.json();
-                if (prospecto_numero) {
-                  numeroProspecto = prospecto_numero;
-                  conversacionesMap.set(remoteJid, numeroProspecto); // cachear
-                  console.log(`✅ ${vendedorId} | Encontrado en BD: ${remoteJid} → ${numeroProspecto}`);
-                }
-              } catch (err) {
-                console.error(`❌ ${vendedorId} | Error buscando en BD:`, err.message);
-              }
-            }
-
-            // Sin número disponible → omitir
-            if (!numeroProspecto) {
-              console.log(`⚠️ ${vendedorId} | No se pudo determinar prospecto para ${remoteJid}, ignorando`);
-              continue;
-            }
-
-          } else {
-            // Otro formato desconocido
-            numeroProspecto = remoteJid;
-            console.log(`📱 ${vendedorId} | Saliente fallback: ${remoteJid}`);
-          }
-        }
-
-        // Limpiar formato del número
-        const numeroLimpio = numeroProspecto
-          .replace('@s.whatsapp.net', '')
-          .replace('@lid', '')
-          .replace('@c.us', '');
-
-        console.log(`📱 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio}`);
-        appLogger.info(`📨 Supervisor ${vendedorId} | ${direccion} | Prospecto: ${numeroLimpio} | "${texto.substring(0, 50)}..."`);
+        console.log(`[upsert] from=${msg.key.fromMe} jid=${jid} prospecto=${prospecto_numero} dir=${direccion}`);
 
         try {
           let analisis = null;
-          if (!esDelVendedor) {
+          if (!msg.key.fromMe) {
             try {
               analisis = await analizarMensaje(texto);
             } catch (err) {
-              appLogger.warn({ err }, `Error analizando mensaje de ${numeroLimpio}`);
+              appLogger.warn({ err }, `Error analizando mensaje de ${prospecto_numero}`);
             }
           }
-          const prospectoNombre = esDelVendedor ? null : (msg.pushName || null);
-          await guardarInteraccion(vendedorId, numeroLimpio, texto, !esDelVendedor, analisis, prospectoNombre);
-          appLogger.info(`💾 Guardado | Vendedor: ${vendedorId} | Dirección: ${direccion}`);
+          const prospecto_nombre = msg.key.fromMe ? null : (msg.pushName || null);
+          await guardarInteraccion(vendedorId, prospecto_numero, texto, !msg.key.fromMe, analisis, prospecto_nombre);
+          appLogger.info(`💾 Guardado | ${vendedorId} | ${direccion} | ${prospecto_numero}`);
         } catch (err) {
           appLogger.error({ err }, `Error guardando interacción supervisor ${vendedorId}`);
         }
