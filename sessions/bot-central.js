@@ -301,7 +301,7 @@ async function enviarMensajeDesdeBot(slug, numero, mensaje) {
     throw err;
   }
 
-  if (bot.estado !== 'connected') {
+  if (bot.estado !== 'connected' || !bot.socket) {
     const err = new Error('not_connected');
     err.code = 'not_connected';
     throw err;
