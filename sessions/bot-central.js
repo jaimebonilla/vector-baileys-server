@@ -287,6 +287,31 @@ async function enviarMensajeBotCentral(numero, mensaje, slug) {
   await bot.socket.sendMessage(jid, { text: mensaje }, { ephemeralExpiration: 0 });
 }
 
+/**
+ * Envía un mensaje saliente desde el bot-central de un slug.
+ * Requiere slug explícito, devuelve el messageId de Baileys.
+ * Lanza errores con .code para control de flujo en el endpoint HTTP.
+ */
+async function enviarMensajeDesdeBot(slug, numero, mensaje) {
+  const bot = botCentrales.get(slug);
+
+  if (!bot) {
+    const err = new Error('session_not_found');
+    err.code = 'session_not_found';
+    throw err;
+  }
+
+  if (bot.estado !== 'connected') {
+    const err = new Error('not_connected');
+    err.code = 'not_connected';
+    throw err;
+  }
+
+  const jid = `${numero}@s.whatsapp.net`;
+  const sent = await bot.socket.sendMessage(jid, { text: mensaje }, { ephemeralExpiration: 0 });
+  return sent?.key?.id;
+}
+
 async function reiniciarBotCentral(slug) {
   const appLogger = global.logger;
   appLogger.info(`♻️ Reiniciando Bot Central: ${slug}`);
@@ -320,6 +345,7 @@ module.exports = {
   reiniciarBotCentral,
   limpiarSesionBotCentral,
   enviarMensajeBotCentral,
+  enviarMensajeDesdeBot,
   getEstadoBotCentral,
   getQRBotCentral,
   getAllBotCentrales

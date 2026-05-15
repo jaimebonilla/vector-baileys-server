@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { enviarMensajeBotCentral, getEstadoBotCentral, reiniciarBotCentral, limpiarSesionBotCentral, iniciarBotCentral, getAllBotCentrales } = require('../sessions/bot-central');
+const { enviarMensajeBotCentral, enviarMensajeDesdeBot, getEstadoBotCentral, reiniciarBotCentral, limpiarSesionBotCentral, iniciarBotCentral, getAllBotCentrales } = require('../sessions/bot-central');
 const { getSesionesActivas, reiniciarSesionSupervisor, limpiarSesionSupervisor, limpiarTodasLasSesionesSupervisores, registrarLid } = require('../sessions/supervisor');
 const { obtenerAlertas, marcarAlertaEnviada } = require('../services/supabase');
 
@@ -168,6 +168,47 @@ router.post('/bot-central/:slug/iniciar', async (req, res) => {
   } catch (err) {
     logger.error({ err }, `Error en POST /api/bot-central/${slug}/iniciar`);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/bot-central/:slug/enviar
+ * Envía un mensaje saliente desde el bot central de la empresa al número indicado.
+ * Body: { numero: "573001234567", mensaje: "texto..." }
+ *
+ * Errores:
+ *   400 invalid_payload   — falta numero/mensaje o número < 8 dígitos tras normalizar
+ *   404 session_not_found — no existe sesión para ese slug (no se llamó /iniciar)
+ *   409 not_connected     — sesión existe pero no está en estado 'connected'
+ *   500 send_failed       — error inesperado de Baileys al enviar
+ */
+router.post('/bot-central/:slug/enviar', async (req, res) => {
+  const logger = global.logger;
+  const { slug } = req.params;
+  const { numero, mensaje } = req.body;
+
+  if (!numero || !mensaje) {
+    return res.status(400).json({ ok: false, error: 'invalid_payload' });
+  }
+
+  const numeroNorm = String(numero).replace(/\D/g, '');
+  if (numeroNorm.length < 8) {
+    return res.status(400).json({ ok: false, error: 'invalid_payload' });
+  }
+
+  try {
+    const messageId = await enviarMensajeDesdeBot(slug, numeroNorm, String(mensaje));
+    logger.info(`[bot-central:${slug}] enviar → ${numeroNorm} (${messageId})`);
+    return res.json({ ok: true, messageId });
+  } catch (err) {
+    if (err.code === 'session_not_found') {
+      return res.status(404).json({ ok: false, error: 'session_not_found' });
+    }
+    if (err.code === 'not_connected') {
+      return res.status(409).json({ ok: false, error: 'not_connected' });
+    }
+    logger.error({ err }, `[bot-central:${slug}] send_failed → ${numeroNorm}`);
+    return res.status(500).json({ ok: false, error: 'send_failed', detail: err.message });
   }
 });
 
