@@ -8,6 +8,8 @@ const {
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
+const { getAllowedCentralNumbers, normalizeJid, matchesAllowed } = require('../src/lib/allowedCentralNumbers');
+
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions_data');
 const MAX_REINTENTOS = 10;
 const logger = pino({ level: 'silent' });
@@ -195,16 +197,34 @@ async function procesarMensajeBotCentral(slug, msg, sock) {
     const remitenteRaw = msg.key.senderPn || msg.key.participant || msg.key.remoteJid;
     const remitente = remitenteRaw.replace('@s.whatsapp.net', '').replace('@c.us', '');
 
-    const gerentesAutorizados = getGerentesAutorizados();
-    const remitenteNorm = normalizarNumero(remitente);
-    const esGerente = gerentesAutorizados.some(n => {
-      const nNorm = normalizarNumero(n);
-      return remitenteNorm === nNorm || remitenteNorm.includes(nNorm) || remitenteNorm.endsWith(nNorm);
-    });
+    const sender = normalizeJid(remitenteRaw);
+    const allowed = await getAllowedCentralNumbers(slug);
 
-    if (!esGerente) {
-      appLogger.debug(`Bot Central ${slug}: mensaje ignorado de número no autorizado ${remitente}`);
-      return;
+    if (allowed !== null) {
+      if (!matchesAllowed(sender, allowed)) return; // not authorized — ignore silently
+
+      // Log when the sender is an extra authorized number (not a classic env-var gerente)
+      const gerentesAutorizados = getGerentesAutorizados();
+      const remitenteNorm = normalizarNumero(remitente);
+      const esGerenteClasico = gerentesAutorizados.some(n => {
+        const nNorm = normalizarNumero(n);
+        return remitenteNorm === nNorm || remitenteNorm.includes(nNorm) || remitenteNorm.endsWith(nNorm);
+      });
+      if (!esGerenteClasico) {
+        console.log('[bot-central] forwarding from authorized extra:', sender, 'slug=', slug);
+      }
+    } else {
+      // Fallback: edge function unavailable — accept only env-var gerentes
+      const gerentesAutorizados = getGerentesAutorizados();
+      const remitenteNorm = normalizarNumero(remitente);
+      const esGerente = gerentesAutorizados.some(n => {
+        const nNorm = normalizarNumero(n);
+        return remitenteNorm === nNorm || remitenteNorm.includes(nNorm) || remitenteNorm.endsWith(nNorm);
+      });
+      if (!esGerente) {
+        appLogger.debug(`Bot Central ${slug}: mensaje ignorado de número no autorizado ${remitente}`);
+        return;
+      }
     }
 
     const texto = extraerTexto(msg.message);
