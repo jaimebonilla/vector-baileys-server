@@ -9,10 +9,10 @@ const {
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const { analizarMensaje } = require('../services/claude');
+const { guardarMensaje, consultarConversaciones, buscarProspectoPorLid } = require('../src/lib/supabaseFunctions');
 
 const SESSIONS_DIR = path.join(process.cwd(), 'sessions_data');
 const MAX_REINTENTOS = 10;
-const EDGE_FUNCTION_BASE = 'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy';
 const logger = pino({ level: 'silent' });
 
 function lidMapPath(sessionPath) {
@@ -38,26 +38,15 @@ function saveLidMap(sessionPath, map) {
 
 async function guardarInteraccion(vendedorId, numeroProspecto, texto, esEntrante, analisis = null, prospectoNombre = null) {
   try {
-    const response = await fetch(`${EDGE_FUNCTION_BASE}/guardar-mensaje`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        vendedor_id: vendedorId,
-        prospecto_numero: numeroProspecto,
-        texto: texto,
-        direccion: esEntrante ? 'entrante' : 'saliente',
-        prospecto_nombre: prospectoNombre,
-        analisis_claude: analisis
-      })
+    await guardarMensaje({
+      vendedor_id: vendedorId,
+      prospecto_numero: numeroProspecto,
+      texto,
+      esEntrante,
+      analisis_claude: analisis,
+      prospecto_nombre: prospectoNombre
     });
-
-    const result = await response.json();
-
-    if (result.success) {
-      console.log(`✅ Interacción guardada | ${vendedorId} | ${numeroProspecto}`);
-    } else {
-      console.error('❌ Error al guardar interacción:', result);
-    }
+    console.log(`✅ Interacción guardada | ${vendedorId} | ${numeroProspecto}`);
   } catch (error) {
     console.error('❌ Error guardando interacción:', error);
   }
@@ -126,13 +115,7 @@ async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
     // Usar el proxy de Lovable para obtener los teléfonos de clientes
     // (clientes está en un schema no-público, no accesible via REST directo)
     console.log(`[lid-auto] ${vendedorId} | consultando clientes via proxy...`);
-    const res = await fetch(`${EDGE_FUNCTION_BASE}/consultar-conversaciones`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vendedor_id: vendedorId })
-    });
-    if (!res.ok) throw new Error(`Proxy consultar-conversaciones ${res.status}: ${await res.text()}`);
-    const rawData = await res.json();
+    const rawData = await consultarConversaciones(vendedorId);
     console.log(`[lid-auto] ${vendedorId} | respuesta proxy (primeros 2):`, JSON.stringify(Array.isArray(rawData) ? rawData.slice(0, 2) : rawData));
 
     // El proxy puede devolver array directo o { clientes: [...] } o { data: [...] }
@@ -199,16 +182,11 @@ async function autoMapearLids(vendedorId, sock, lidToPhone, sessionPath) {
 async function resolverLidViaProxy(lid, vendedorId) {
   try {
     const lidSinSufijo = lid.replace(/@lid$/, '');
-    const res = await fetch(`${EDGE_FUNCTION_BASE}/buscar-prospecto-por-lid`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lid: lidSinSufijo, vendedor_id: vendedorId })
-    });
-    if (!res.ok) {
-      console.log(`[lid-proxy] ${vendedorId} | proxy respondió ${res.status} para ${lid}`);
+    const data = await buscarProspectoPorLid(lidSinSufijo, vendedorId);
+    if (!data) {
+      console.log(`[lid-proxy] ${vendedorId} | proxy respondió sin datos para ${lid}`);
       return null;
     }
-    const data = await res.json();
     // Aceptar cualquier campo razonable que devuelva el proxy
     const telefono = data?.telefono || data?.phone || data?.prospecto_numero || data?.numero || null;
     if (telefono) {

@@ -5,6 +5,7 @@ const pino = require('pino');
 
 const { getSesionesActivas } = require('./sessions/supervisor');
 const { iniciarBotCentral } = require('./sessions/bot-central');
+const { obtenerEmpresasActivas: _obtenerEmpresasActivasEdge } = require('./src/lib/supabaseFunctions');
 const qrRoutes = require('./routes/qr');
 const apiRoutes = require('./routes/api');
 const { iniciarCronAlertas } = require('./services/alertas');
@@ -71,9 +72,7 @@ async function obtenerEmpresasActivas() {
   for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
     try {
       logger.info(`🌐 Cargando empresas activas desde Lovable Cloud (intento ${intento}/${MAX_INTENTOS})...`);
-      const res = await fetch(`${edgeUrl}/empresas-activas`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-      const empresas = await res.json();
+      const empresas = await _obtenerEmpresasActivasEdge(edgeUrl);
       if (!Array.isArray(empresas)) throw new Error('Respuesta inesperada: se esperaba un array');
       logger.info(`✅ ${empresas.length} empresa(s) cargadas: ${empresas.map(e => e.slug).join(', ')}`);
       return empresas;

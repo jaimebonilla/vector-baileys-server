@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { guardarMensaje: _guardarMensajeEdge } = require('../src/lib/supabaseFunctions');
 
 let supabase = null;
 
@@ -72,26 +73,13 @@ async function obtenerOCrearConversacion(vendedorId, prospectoNumero) {
  * @param {object|null} analisis
  */
 async function guardarMensaje(vendedorId, prospectoNumero, texto, esEntrante, analisis) {
-  const response = await fetch(
-    'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy/guardar-mensaje',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        vendedor_id: vendedorId,
-        prospecto_numero: prospectoNumero,
-        texto: texto,
-        direccion: esEntrante ? 'entrante' : 'saliente',
-        analisis_claude: analisis
-      })
-    }
-  );
-
-  const result = await response.json();
-  if (!result.success) {
-    throw new Error(result.error || 'Error guardando mensaje');
-  }
-
+  const result = await _guardarMensajeEdge({
+    vendedor_id: vendedorId,
+    prospecto_numero: prospectoNumero,
+    texto,
+    esEntrante,
+    analisis_claude: analisis
+  });
   console.log('✅ Mensaje guardado:', result);
   return result;
 }

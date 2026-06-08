@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { obtenerConversacionesInactivas, obtenerAlertas } = require('./supabase');
+const { crearAlerta: _crearAlertaEdge } = require('../src/lib/supabaseFunctions');
 
 /**
  * Crea una alerta vía Edge Function proxy.
@@ -8,24 +9,7 @@ const { obtenerConversacionesInactivas, obtenerAlertas } = require('./supabase')
  * @param {string} mensaje
  */
 async function crearAlerta(vendedorId, tipo, mensaje) {
-  const response = await fetch(
-    'https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1/railway-proxy/crear-alerta',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        vendedor_id: vendedorId,
-        tipo: tipo,
-        mensaje: mensaje
-      })
-    }
-  );
-
-  const result = await response.json();
-  if (!result.success) {
-    throw new Error(result.error || 'Error creando alerta');
-  }
-
+  const result = await _crearAlertaEdge({ vendedor_id: vendedorId, tipo, mensaje });
   console.log('✅ Alerta creada:', result);
   return result;
 }

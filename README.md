@@ -39,6 +39,8 @@ npm start
 | `ANTHROPIC_API_KEY` | API key de Anthropic | `sk-ant-...` |
 | `SUPABASE_URL` | URL de tu proyecto Supabase | `https://xxx.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | Service key de Supabase | `eyJ...` |
+| `RAILWAY_BOT_SECRET` | **Requerida.** Secreto compartido inyectado como `X-Bot-Secret` en todas las llamadas salientes a Supabase Edge Functions. Debe coincidir con el valor configurado en las Edge Functions. El servidor no arranca si falta. | `Railwaybot` |
+| `LOVABLE_EDGE_URL` | URL base del despliegue de Edge Functions de Lovable/Supabase | `https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1` |
 | `PORT` | Puerto HTTP (default: 3000) | `3000` |
 | `GERENTES_NUMEROS` | Números autorizados en Bot Central (con código de país, sin +) | `5219991234567,5219997654321` |
 | `ALERT_THRESHOLD_DAYS` | Días de inactividad para generar alerta (default: 3) | `3` |
@@ -140,6 +142,8 @@ En el panel de Railway → tu servicio → **Variables**, agrega:
 ANTHROPIC_API_KEY=sk-ant-...
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_SERVICE_KEY=eyJ...
+RAILWAY_BOT_SECRET=Railwaybot
+LOVABLE_EDGE_URL=https://vqlesrbrrxscydvjjeux.supabase.co/functions/v1
 GERENTES_NUMEROS=5219991234567
 ALERT_THRESHOLD_DAYS=3
 ```
